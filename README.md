@@ -16,12 +16,12 @@
 3. Double-click **`goodbyedpi.exe`**. No `cmd.exe` window stays open — the app immediately settles into the **bottom-right System Tray (Notification Area)**.
 4. On first launch, it automatically probes all 7 Turkish ISP profiles via real TLS 1.3 `ClientHello` $\rightarrow$ `ServerHello` handshakes, selects the fastest profile for your ISP, and saves your preference in `turkdpi.cfg`.
 5. **Right-click the System Tray icon** at any time to:
-   - **`⚡ Otomatik İSS Algıla (En Hızlı Profili Bul)`** — Re-probe all profiles in the background.
-   - **`🔍 Discord & TLS 1.3 Bağlantısını Test Et`** — Measure live TLS 1.3 handshake latency to `discord.com`.
+   - **` Otomatik İSS Algıla (En Hızlı Profili Bul)`** — Re-probe all profiles in the background.
+   - **` Discord & TLS 1.3 Bağlantısını Test Et`** — Measure live TLS 1.3 handshake latency to `discord.com`.
    - **Switch ISP Profiles (`[0]..[6]`)** — Instantaneous in-memory hot-swap + DNS cache flush.
-   - **`⏸ DPI Filtresini Duraklat / ▶ Başlat`** — Pause or resume packet filtering on the fly.
-   - **`🚀 Windows Açılışında Otomatik Başlat`** — Toggle automatic background Tray launch on Windows login.
-   - **`🧹 Sürücü ve Ayarları Sıfırla (Tamamen Kaldır)`** — Remove all drivers, services, startup tasks, and config files cleanly.
+   - **` DPI Filtresini Duraklat / ▶ Başlat`** — Pause or resume packet filtering on the fly.
+   - **` Windows Açılışında Otomatik Başlat`** — Toggle automatic background Tray launch on Windows login.
+   - **` Sürücü ve Ayarları Sıfırla (Tamamen Kaldır)`** — Remove all drivers, services, startup tasks, and config files cleanly.
 
 ---
 
