@@ -18,12 +18,12 @@ Görev çubuğunda siyah `cmd.exe` penceresi tutmaz ve `.cmd` betik kalabalığ�
 3. **`goodbyedpi.exe`** dosyasına çift tıklayın. Program hiçbir siyah konsol penceresi açmadan doğrudan **sağ alt köşedeki System Tray (Sistem Tepsisi)** alanına yerleşir.
 4. İlk çalıştırmada İSS'niz için en hızlı çalışan profili arka planda otomatik olarak algılar, aktif eder ve seçiminizi `turkdpi.cfg` dosyasına kaydeder.
 5. Sağ alttaki **TurkDPI simgesine sağ tıklayarak** (veya sol tıklayarak) açılan menüden:
-   - **`⚡ Otomatik İSS Algıla (En Hızlı Profili Bul)`**: 7 farklı Türkiye İSS profilini gerçek TLS 1.3 el sıkışmasıyla test edip en hızlısını seçer.
-   - **`🔍 Discord & TLS 1.3 Bağlantısını Test Et`**: Anlık Discord TLS 1.3 erişimini milisaniye (`ms`) cinsinden ölçüp bildirim olarak gösterir.
+   - **` Otomatik İSS Algıla (En Hızlı Profili Bul)`**: 7 farklı Türkiye İSS profilini gerçek TLS 1.3 el sıkışmasıyla test edip en hızlısını seçer.
+   - **` Discord & TLS 1.3 Bağlantısını Test Et`**: Anlık Discord TLS 1.3 erişimini milisaniye (`ms`) cinsinden ölçüp bildirim olarak gösterir.
    - **Profiller (`[0]..[6]`)**: Tek tıkla programı kapatmadan profiller arasında geçiş yapar ve DNS önbelleğini temizler.
-   - **`⏸ DPI Filtresini Duraklat / ▶ Başlat`**: İstediğiniz an filtreyi tek tıkla duraklatıp devam ettirir.
-   - **`🚀 Windows Açılışında Otomatik Başlat`**: Bilgisayar her açıldığında sağ alt tepside otomatik başlamasını açar/kapatır.
-   - **`🧹 Sürücü ve Ayarları Sıfırla (Tamamen Kaldır)`**: WinDivert sürücüsünü, başlangıç görevini ve ayarları tamamen temizleyip çıkar.
+   - **` DPI Filtresini Duraklat / ▶ Başlat`**: İstediğiniz an filtreyi tek tıkla duraklatıp devam ettirir.
+   - **` Windows Açılışında Otomatik Başlat`**: Bilgisayar her açıldığında sağ alt tepside otomatik başlamasını açar/kapatır.
+   - **` Sürücü ve Ayarları Sıfırla (Tamamen Kaldır)`**: WinDivert sürücüsünü, başlangıç görevini ve ayarları tamamen temizleyip çıkar.
 
 ---
 
