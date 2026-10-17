@@ -356,7 +356,7 @@ static HANDLE init(char *filter, UINT64 flags) {
     filter = WinDivertOpen(filter, WINDIVERT_LAYER_NETWORK, 0, flags);
     if (filter != INVALID_HANDLE_VALUE) {
         if (!(flags & WINDIVERT_FLAG_DROP)) {
-            WinDivertSetParam(filter, WINDIVERT_PARAM_QUEUE_LEN, 8192);
+            WinDivertSetParam(filter, WINDIVERT_PARAM_QUEUE_LENGTH, 8192);
             WinDivertSetParam(filter, WINDIVERT_PARAM_QUEUE_SIZE, 4194304);
             WinDivertSetParam(filter, WINDIVERT_PARAM_QUEUE_TIME, 2048);
         }
