@@ -41,7 +41,7 @@ GoodbyeDPI-Turkey/
 │   ├── goodbyedpi.exe.manifest  # Otomatik Yönetici Yetkisi (UAC) bildirimi
 │   └── Makefile                 # Derleme ve Sanitizer/Benchmark test betiği
 ├── tests/
-│   └── bench_hotpath.c          # Birim testleri ve nanosaniye mikro-benchmark paketi
+│   └── bench_hotpath.c          # Birim testleri ve A/B karşılaştırmalı mikro-benchmark paketi
 └── windows/
     ├── goodbyedpi.exe           # Derlenmiş 64-bit System Tray uygulaması
     ├── WinDivert.dll            # İmzalı WinDivert 2.2 kütüphanesi
@@ -50,16 +50,49 @@ GoodbyeDPI-Turkey/
 
 ---
 
-## Performans Karşılaştırması (Orijinal Repo vs. TurkDPI v2.1)
+## A/B Performans Karşılaştırması (Orijinal Repo vs. TurkDPI v2.1)
 
-| Çekirdek Bileşeni | Orijinal Repo | TurkDPI v2.1 | Hızlanma | Mimari Detay |
+Aynı paket yükleri üzerinde 500.000 – 2.000.000 iterasyonla deterministik olarak ölçülmüştür (`gcc -O3 -flto -march=x86-64-v2 -fno-plt`, `tests/bench_hotpath.c`):
+
+| Çekirdek / Paket Hattı Aşaması | Orijinal GoodbyeDPI-Turkey | TurkDPI v2.1 | Hızlanma | Mimari Fark |
 | :--- | :---: | :---: | :---: | :--- |
-| **TLS 1.3 + Post-Quantum SNI Ayrıştırıcı** (`1297 B`) | `718.66 ns` | **`7.78 ns`** | **92.3x** | Kayıt ve uzantı uzunlukları üzerinden doğrudan SNI ofset atlama |
-| **RFC 1624 Diferansiyel Checksum** (`547 B`) | `44.76 ns` | **`2.19 ns`** | **20.4x** | Yalnızca değişen 16/32-bit başlık alanlarını O(1) sürede güncelleme |
-| **HTTP Başlık Arama (`fast_memmem`)** (`507 B`) | `139.74 ns` | **`15.62 ns`** | **8.9x** | `SSE2` 16-bayt/döngü vektör karşılaştırma |
-| **Zero-Copy Kara Liste Arama** | `uthash` + `malloc` | **`10.52 ns`** | **Sıfır Kopya** | Donanımsal `_mm_crc32_u64` ile kopyalamasız alan adı soneki eşleştirme |
-| **UDP DNS Conntrack (`Giden + Gelen`)** | `66.30 ns` + `malloc` | **`53.38 ns`** | **Sıfır Tahsis** | 64-bayt hizalı 2048 yuvalı statik tablo |
-| **TCP Auto-TTL Conntrack (`SYN-ACK + Sorgu`)** | `73.94 ns` + `malloc` | **`55.51 ns`** | **Sıfır Tahsis** | 64-bayt hizalı 4096 yuvalı statik tablo |
+| **TLS 1.3 + Post-Quantum SNI Ayrıştırıcı** (`1297 B`) | `605.85 ns` | **`7.96 ns`** | **76.1x** | $O(N)$ bayt tarama yerine doğrudan uzantı uzunluğu üzerinden SNI ofset atlama |
+| **Paket Başlığı Checksum Hesabı** (`547 B`) | `44.50 ns` | **`2.14 ns`** | **20.8x** | Tüm paketi baştan taramak yerine $O(1)$ RFC 1624 diferansiyel güncelleme |
+| **HTTP Başlık Arama (`fast_memmem`)** (`507 B`) | `118.60 ns` | **`23.62 ns`** | **5.0x** | Bayt-bayt döngü yerine `SSE2` 16-bayt/döngü vektör karşılaştırma |
+| **DNS Conntrack (`Giden + Gelen`)** | `77.53 ns` (`malloc`/`free`) | **`20.10 ns`** (`0 tahsis`) | **3.9x** | `UTHASH` heap düğümü + $O(N)$ temizlik yerine 64B hizalı statik tablo |
+| **Uçtan Uca TLS Desync Hattı (End-to-End)** | `856.59 ns` | **`186.93 ns`** | **4.6x** | `9016B` yedek kopya + 2 ayrı syscall yerine 3-parça SNI-MidSplit tek `WinDivertSendEx` |
+| **Tek Çekirdek Maksimum TLS Desync Hızı** | `1.17 Mpps` | **`5.35 Mpps`** | **4.6x** | Saniyede işlenebilen milyon TLS `ClientHello` paketi (tek CPU çekirdeği) |
+
+---
+
+## Performans Farkını Kendiniz Nasıl Ölçebilirsiniz?
+
+### 1. Deterministik A/B Çekirdek Benchmark'ı (Linux / WSL / MinGW)
+`tests/bench_hotpath.c` içindeki test paketi, orijinal algoritmaları ve TurkDPI v2.1 motorunu birebir aynı paketler üzerinde yarıştırıp nanosaniye (`ns`) ve `Mpps` (saniyede milyon paket) cinsinden tabloyu ekrana basar:
+
+```bash
+make -C src test OPTIMIZE=1
+```
+
+### 2. Canlı Windows Ölçümü (RAM, CPU ve Discord TLS 1.3 El Sıkışma Süresi)
+`goodbyedpi.exe` sağ altta (System Tray) çalışırken **PowerShell** penceresinde şu komutları çalıştırarak canlı tüketimi ve TLS 1.3 bağlantı süresini ölçebilirsiniz:
+
+```powershell
+# 1. Anlık RAM (MB) ve Toplam CPU Süresini Ölç
+Get-Process goodbyedpi | Select-Object Name, Id, @{N="RAM (MB)";E={[math]::Round($_.WorkingSet64 / 1MB, 2)}}, @{N="CPU (sn)";E={[math]::Round($_.CPU, 3)}}
+
+# 2. Discord.com:443 Üzerinde 5 Gerçek TLS 1.3 El Sıkışmasını Milisaniye Olarak Ölç
+$ip = (Resolve-DnsName discord.com -Server 77.88.8.8 -Type A | Select-Object -First 1).IPAddress
+1..5 | ForEach-Object {
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $tcp = New-Object System.Net.Sockets.TcpClient($ip, 443)
+    $ssl = New-Object System.Net.Security.SslStream($tcp.GetStream(), $false)
+    $ssl.AuthenticateAsClient("discord.com")
+    $sw.Stop()
+    Write-Host ("Test #{0}: Protokol={1} | El Sikisma Suresi={2} ms" -f $_, $ssl.SslProtocol, $sw.ElapsedMilliseconds)
+    $ssl.Dispose(); $tcp.Dispose()
+}
+```
 
 ---
 

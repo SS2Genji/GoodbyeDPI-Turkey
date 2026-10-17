@@ -70,7 +70,11 @@ static inline BOOL FreeLibrary(HMODULE hLibModule) { (void)hLibModule; return TR
 
 static inline ULONGLONG GetTickCount64(void) {
     struct timespec ts;
+#ifdef CLOCK_MONOTONIC_COARSE
+    clock_gettime(CLOCK_MONOTONIC_COARSE, &ts);
+#else
     clock_gettime(CLOCK_MONOTONIC, &ts);
+#endif
     return (ULONGLONG)ts.tv_sec * 1000ULL + (ULONGLONG)(ts.tv_nsec / 1000000ULL);
 }
 

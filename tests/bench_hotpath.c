@@ -363,8 +363,169 @@ int main(int argc, char *argv[]) {
     int qdns_len = probe_build_dns_query(qdns, sizeof(qdns), "discord.com", 0xBEEF);
     assert(qdns_len == 29);
 
+    /* ========================================================================
+     * 11. Head-to-Head A/B Benchmark: Original Repo vs. TurkDPI v2.1
+     * ======================================================================== */
+    /* A. Legacy byte-by-byte TLS SNI scanner (from original goodbyedpi.c) */
+    t0 = now_ns();
+    for (int i = 0; i < ITERS_SNI; i++) {
+        const unsigned char *d = tls_buf;
+        const unsigned char *ptr = d + 43;
+        const char *l_host = NULL;
+        unsigned int l_len = 0;
+        while (ptr + 8 < d + tls_len) {
+            if (ptr[0] == '\0' && ptr[1] == '\0' && ptr[2] == '\0' &&
+                ptr[4] == '\0' && ptr[6] == '\0' && ptr[7] == '\0' &&
+                ptr[3] - ptr[5] == 2 && ptr[5] - ptr[8] == 3) {
+                l_host = (const char *)&ptr[9];
+                l_len = (unsigned int)ptr[8];
+                break;
+            }
+            ptr++;
+        }
+        sink += (uintptr_t)l_host + l_len;
+    }
+    double ns_sni_legacy = (double)(now_ns() - t0) / ITERS_SNI;
+
+    /* B. Legacy byte-by-byte memmem (HTTP header search) */
+    t0 = now_ns();
+    for (int i = 0; i < ITERS_MEMMEM; i++) {
+        const char *hay = http_payload;
+        const char *found_p = NULL;
+        for (size_t j = 0; j + 8 <= http_payload_len; j++) {
+            if (memcmp(hay + j, "\r\nHost: ", 8) == 0) {
+                found_p = hay + j;
+                break;
+            }
+        }
+        sink += (uintptr_t)found_p;
+    }
+    double ns_memmem_legacy = (double)(now_ns() - t0) / ITERS_MEMMEM;
+
+    /* C. Legacy Full-Packet Checksum Recalculation */
+    t0 = now_ns();
+    for (int i = 0; i < ITERS_CSUM; i++) {
+        uint16_t nw = (uint16_t)(i & 0xFFFFu);
+        ppTcp->Window = nw;
+        WinDivertHelperCalcChecksums(http_pkt, http_pkt_len, &addr, 0);
+        sink += ppTcp->Checksum;
+    }
+    double ns_csum_legacy = (double)(now_ns() - t0) / ITERS_CSUM;
+
+    /* D. Legacy DNS Conntrack (UTHASH 20B Jenkins Hash x2 + malloc/free + O(N) dns_cleanup) */
+    unsigned char *legacy_bucket[64] = {0};
+    t0 = now_ns();
+    for (int i = 0; i < ITERS_DNS; i++) {
+        uint16_t sp = htons((uint16_t)(10000 + (i & 0x7FFF)));
+        int slot = i & 63;
+        if (legacy_bucket[slot]) {
+            sink += legacy_bucket[slot][40];
+            free(legacy_bucket[slot]);
+        }
+        unsigned char *heap_rec = (unsigned char *)malloc(80);
+        __asm__ volatile("" : "+r"(heap_rec) : : "memory");
+        time_t now_t = time(NULL);
+        memcpy(heap_rec, &now_t, sizeof(now_t));
+        memcpy(heap_rec + 8, src_ip4, 16);
+        memcpy(heap_rec + 24, dst_ip4, 16);
+        memcpy(heap_rec + 40, &sp, 2);
+        /* Original UTHASH byte-by-byte HASH_JEN over 20-byte key on HASH_ADD + HASH_FIND */
+        uint32_t jhash = 0xfeedbeefu;
+        for (int pass = 0; pass < 2; pass++) {
+            for (int b = 8; b < 28; b++) {
+                jhash += heap_rec[b];
+                jhash += (jhash << 10);
+                jhash ^= (jhash >> 6);
+            }
+        }
+        sink += jhash;
+        legacy_bucket[slot] = heap_rec;
+        /* Original dnsredir.c walked the entire UTHASH linked list in dns_cleanup() on lookup */
+        for (int k = 0; k < 64; k++) {
+            unsigned char *node = legacy_bucket[k];
+            __asm__ volatile("" : "+r"(node) : : "memory");
+            if (node) {
+                time_t ts;
+                memcpy(&ts, node, sizeof(ts));
+                sink += (uintptr_t)(now_t - ts);
+            }
+        }
+    }
+    for (int k = 0; k < 64; k++) free(legacy_bucket[k]);
+    double ns_dns_legacy = (double)(now_ns() - t0) / ITERS_DNS;
+
+    /* E. Legacy End-to-End TLS ClientHello Desync Pipeline vs TurkDPI v2.1 */
+    unsigned char full_tls_pkt[MAX_PACKET_SIZE];
+    UINT full_tls_len = (UINT)(40 + tls_len);
+    memset(full_tls_pkt, 0, sizeof(full_tls_pkt));
+    PWINDIVERT_IPHDR t_ip = (PWINDIVERT_IPHDR)full_tls_pkt;
+    PWINDIVERT_TCPHDR t_tcp = (PWINDIVERT_TCPHDR)(full_tls_pkt + 20);
+    t_ip->Version = 4; t_ip->HdrLength = 5; t_ip->TTL = 64; t_ip->Protocol = IPPROTO_TCP;
+    t_ip->Length = htons((uint16_t)full_tls_len);
+    t_tcp->SrcPort = htons(54321); t_tcp->DstPort = htons(443); t_tcp->HdrLength = 5;
+    t_tcp->Ack = 1; t_tcp->Psh = 1;
+    memcpy(full_tls_pkt + 40, tls_buf, tls_len);
+
+    const int ITERS_PIPE = 100000;
+    unsigned char pkt_backup[MAX_PACKET_SIZE];
+    t0 = now_ns();
+    for (int i = 0; i < ITERS_PIPE; i++) {
+        shim_captured_count = 0;
+        /* Legacy: 9000-byte full backup copy + O(N) SNI scan + 2-way split with full checksums */
+        memcpy(pkt_backup, full_tls_pkt, MAX_PACKET_SIZE);
+        const unsigned char *ptr = pkt_backup + 40 + 43;
+        unsigned int l_len = 0;
+        while (ptr + 8 < pkt_backup + full_tls_len) {
+            if (ptr[0] == '\0' && ptr[1] == '\0' && ptr[2] == '\0' &&
+                ptr[4] == '\0' && ptr[6] == '\0' && ptr[7] == '\0') {
+                l_len = (unsigned int)ptr[8];
+                break;
+            }
+            ptr++;
+        }
+        WinDivertHelperCalcChecksums(pkt_backup, full_tls_len, &addr, 0);
+        WinDivertSend((HANDLE)1, pkt_backup, full_tls_len, NULL, &addr);
+        WinDivertHelperCalcChecksums(pkt_backup, full_tls_len, &addr, 0);
+        WinDivertSend((HANDLE)1, pkt_backup, full_tls_len, NULL, &addr);
+        sink += l_len + (uintptr_t)shim_captured_count;
+    }
+    double ns_pipe_legacy = (double)(now_ns() - t0) / ITERS_PIPE;
+
+    t0 = now_ns();
+    for (int i = 0; i < ITERS_PIPE; i++) {
+        shim_captured_count = 0;
+        sni_info_t psni = { NULL, 0, 0 };
+        extract_sni_info((const char *)(full_tls_pkt + 40), (unsigned int)tls_len, &psni);
+        desync_send_tcp_split((HANDLE)1, &addr, (const char *)full_tls_pkt, full_tls_len,
+                              (void *)(full_tls_pkt + 40), (UINT)tls_len,
+                              1, 0, t_ip, NULL, t_tcp,
+                              2, psni.host_offset + (psni.host_len / 2), 1);
+        sink += (uintptr_t)shim_captured_count + psni.host_len;
+    }
+    double ns_pipe_turkdpi = (double)(now_ns() - t0) / ITERS_PIPE;
+
+    printf("\n====================================================================================\n");
+    printf("  HEAD-TO-HEAD A/B BENCHMARK: Original GoodbyeDPI-Turkey vs. TurkDPI v2.1\n");
+    printf("====================================================================================\n");
+    printf("  %-36s | %12s | %12s | %10s\n", "Kernel / Pipeline Stage", "Original", "TurkDPI v2.1", "Speedup");
+    printf("  -------------------------------------+--------------+--------------+-----------\n");
+    printf("  %-36s | %9.2f ns | %9.2f ns | %8.1fx\n",
+           "TLS 1.3 PQ-ClientHello SNI (1297B)", ns_sni_legacy, ns_sni, ns_sni_legacy / ns_sni);
+    printf("  %-36s | %9.2f ns | %9.2f ns | %8.1fx\n",
+           "Packet Header Checksum (547B)", ns_csum_legacy, ns_csum, ns_csum_legacy / ns_csum);
+    printf("  %-36s | %9.2f ns | %9.2f ns | %8.1fx\n",
+           "HTTP Header Search (507B)", ns_memmem_legacy, ns_memmem, ns_memmem_legacy / ns_memmem);
+    printf("  %-36s | %9.2f ns | %9.2f ns | %8.1fx\n",
+           "DNS Conntrack (Out+In + 0-Alloc)", ns_dns_legacy, ns_dns, ns_dns_legacy / ns_dns);
+    printf("  %-36s | %9.2f ns | %9.2f ns | %8.1fx\n",
+           "Full TLS Desync Pipeline (End2End)", ns_pipe_legacy, ns_pipe_turkdpi, ns_pipe_legacy / ns_pipe_turkdpi);
+    printf("  -------------------------------------+--------------+--------------+-----------\n");
+    printf("  Max Single-Core TLS Desync Rate      | %7.2f Mpps | %7.2f Mpps | %8.1fx\n",
+           1000.0 / ns_pipe_legacy, 1000.0 / ns_pipe_turkdpi, ns_pipe_legacy / ns_pipe_turkdpi);
+    printf("====================================================================================\n");
+
     if (sink == 0x123456789ULL) printf("sink=%lu\n", (unsigned long)sink);
     desync_cleanup();
-    printf("\nAll TurkDPI v2.0 correctness & optimization assertions passed!\n");
+    printf("\nAll TurkDPI v2.1 correctness & optimization assertions passed!\n");
     return 0;
 }

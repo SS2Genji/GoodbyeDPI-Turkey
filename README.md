@@ -39,7 +39,7 @@ GoodbyeDPI-Turkey/
 │   ├── goodbyedpi.exe.manifest  # Native Administrator UAC manifest
 │   └── Makefile                 # Build & Sanitizer/Benchmark runner
 ├── tests/
-│   └── bench_hotpath.c          # Unit assertions & nanosecond micro-benchmark suite
+│   └── bench_hotpath.c          # Unit assertions & Head-to-Head A/B benchmark suite
 └── windows/
     ├── goodbyedpi.exe           # Pre-compiled 64-bit System Tray executable
     ├── WinDivert.dll            # Signed WinDivert 2.2 user-mode library
@@ -48,16 +48,49 @@ GoodbyeDPI-Turkey/
 
 ---
 
-## Hot-Path Micro-Benchmarks (`gcc -O3 -flto -march=x86-64-v2`)
+## Head-to-Head A/B Benchmarks (Original Repo vs. TurkDPI v2.1)
 
-| Kernel Component | Original Repo | TurkDPI v2.1 | Speedup | Implementation Detail |
+Measured deterministically over 500,000–2,000,000 iterations per kernel (`gcc -O3 -flto -march=x86-64-v2 -fno-plt`) via `tests/bench_hotpath.c`:
+
+| Kernel / Pipeline Stage | Original GoodbyeDPI-Turkey | TurkDPI v2.1 | Speedup | Architectural Difference |
 | :--- | :---: | :---: | :---: | :--- |
-| **TLS 1.3 + Post-Quantum SNI Parser** (`1297 B`) | `718.66 ns` | **`7.78 ns`** | **92.3x** | Direct record & extension length jumper (`extract_sni_info`) |
-| **Header Checksum Update** (`547 B`) | `44.76 ns` | **`2.19 ns`** | **20.4x** | RFC 1624 incremental 16/32-bit one's complement arithmetic |
-| **HTTP Header Pattern Search** (`507 B`) | `139.74 ns` | **`15.62 ns`** | **8.9x** | `SSE2` 16B/cycle first/last byte vector broadcast (`fast_memmem`) |
-| **Zero-Copy Blacklist Suffix Lookup** | `uthash` + `malloc` | **`10.52 ns`** | **Zero-Copy** | Case-insensitive `_mm_crc32_u64` suffix hashing |
-| **UDP DNS Conntrack (`Out + In`)** | `66.30 ns` + `malloc` | **`53.38 ns`** | **Zero-Alloc** | 64B-aligned 2048-slot static open-addressed table |
-| **TCP Auto-TTL Conntrack (`In + Out`)** | `73.94 ns` + `malloc` | **`55.51 ns`** | **Zero-Alloc** | 64B-aligned 4096-slot static open-addressed table |
+| **TLS 1.3 + Post-Quantum SNI Parser** (`1297 B`) | `605.85 ns` | **`7.96 ns`** | **76.1x** | $O(N)$ byte scan vs. direct extension length jump (`extract_sni_info`) |
+| **Packet Header Checksum** (`547 B`) | `44.50 ns` | **`2.14 ns`** | **20.8x** | Full payload scan vs. $O(1)$ RFC 1624 incremental update |
+| **HTTP Header Pattern Search** (`507 B`) | `118.60 ns` | **`23.62 ns`** | **5.0x** | Byte-by-byte loop vs. `SSE2` 16B/cycle vector broadcast (`fast_memmem`) |
+| **DNS Conntrack (`Out + In`)** | `77.53 ns` (`malloc`/`free`) | **`20.10 ns`** (`0 alloc`) | **3.9x** | `UTHASH` heap node + $O(N)$ cleanup vs. 64B cache-aligned static table |
+| **Full End-to-End TLS Desync Pipeline** | `856.59 ns` | **`186.93 ns`** | **4.6x** | `9016B` copy + 2x `WinDivertSend` vs. 3-way SNI-MidSplit single `WinDivertSendEx` batch |
+| **Max Single-Core TLS Desync Throughput** | `1.17 Mpps` | **`5.35 Mpps`** | **4.6x** | Million TLS `ClientHello` desync operations per second per CPU core |
+
+---
+
+## How to Reproduce the Benchmarks Yourself
+
+### 1. Deterministic A/B Hot-Path & Pipeline Benchmark (Linux / WSL / MinGW)
+Runs both the legacy algorithms and the TurkDPI v2.1 engine side-by-side over identical packet payloads (`tests/bench_hotpath.c`):
+
+```bash
+make -C src test OPTIMIZE=1
+```
+
+### 2. Live Windows Runtime Benchmark (RAM, CPU & Discord TLS 1.3 Handshake Latency)
+While `goodbyedpi.exe` is running in the System Tray, open **PowerShell** and run:
+
+```powershell
+# 1. Measure Process Memory (Private Working Set) & CPU Time
+Get-Process goodbyedpi | Select-Object Name, Id, @{N="Memory (MB)";E={[math]::Round($_.WorkingSet64 / 1MB, 2)}}, @{N="CPU (s)";E={[math]::Round($_.CPU, 3)}}
+
+# 2. Measure 5 Live TLS 1.3 Handshakes to discord.com:443 (via Yandex DNS 77.88.8.8)
+$ip = (Resolve-DnsName discord.com -Server 77.88.8.8 -Type A | Select-Object -First 1).IPAddress
+1..5 | ForEach-Object {
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $tcp = New-Object System.Net.Sockets.TcpClient($ip, 443)
+    $ssl = New-Object System.Net.Security.SslStream($tcp.GetStream(), $false)
+    $ssl.AuthenticateAsClient("discord.com")
+    $sw.Stop()
+    Write-Host ("Run #{0}: TLS={1} | Handshake={2} ms" -f $_, $ssl.SslProtocol, $sw.ElapsedMilliseconds)
+    $ssl.Dispose(); $tcp.Dispose()
+}
+```
 
 ---
 
