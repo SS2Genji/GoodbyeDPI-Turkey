@@ -158,9 +158,13 @@ static inline BOOL WinDivertSendEx(HANDLE handle, const VOID *pPacket, UINT pack
         UINT8 ver = ptr[0] >> 4;
         UINT pkt_len = 0;
         if (ver == 4) {
-            pkt_len = ntohs(*(const UINT16 *)(ptr + 2));
+            UINT16 len4;
+            memcpy(&len4, ptr + 2, 2);
+            pkt_len = ntohs(len4);
         } else if (ver == 6 && remaining >= 40) {
-            pkt_len = 40 + ntohs(*(const UINT16 *)(ptr + 4));
+            UINT16 len6;
+            memcpy(&len6, ptr + 4, 2);
+            pkt_len = 40 + ntohs(len6);
         }
         if (pkt_len == 0 || pkt_len > remaining) break;
         WinDivertSend(handle, ptr, pkt_len, NULL, &pAddr[i]);

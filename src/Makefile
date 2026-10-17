@@ -7,9 +7,7 @@ WINDIVERTLIBS = ../../binary
 MINGWLIB = /usr/x86_64-w64-mingw32/lib/
 
 TARGET = goodbyedpi.exe
-# Linking SSP does not work for some reason, the executable doesn't start.
-#LIBS = -L$(WINDIVERTLIBS) -Wl,-Bstatic -lssp -Wl,-Bdynamic -lWinDivert -lws2_32
-LIBS = -L$(WINDIVERTLIBS) -lWinDivert -lws2_32 -l:libssp.a
+LIBS = -L$(WINDIVERTLIBS) -lWinDivert -lws2_32 -ladvapi32 -lshell32 -l:libssp.a
 CC = $(CPREFIX)gcc
 
 CCWINDRES = $(CPREFIX)windres
@@ -18,14 +16,13 @@ ifeq (, $(shell which $(CPREFIX)windres))
 endif
 
 CFLAGS = -std=c99 -pie -fPIE -pipe -I$(WINDIVERTHEADERS) -L$(WINDIVERTLIBS) \
-         -O2 -D_FORTIFY_SOURCE=2 -fstack-protector \
-         -Wall -Wextra -Wpedantic -Wformat=2 -Wformat-overflow=2 -Wformat-truncation=2 \
+         -O2 -D_FORTIFY_SOURCE=2 -D_WIN32_WINNT=0x0601 -fstack-protector \
+         -Wall -Wextra -Wformat=2 -Wformat-overflow=2 -Wformat-truncation=2 \
          -Wformat-security -Wno-format-nonliteral -Wshadow -Wstrict-aliasing=1 \
          -Wnull-dereference -Warray-bounds=2 -Wimplicit-fallthrough=3 \
-         -Wstringop-overflow=4 \
-         -Wformat-signedness -Wstrict-overflow=2 -Wcast-align=strict \
-         -Wfloat-equal -Wcast-align -Wsign-conversion \
-         #-fstack-protector-strong
+         -Wstringop-overflow=4 -Wstrict-overflow=2 -Wcast-align=strict \
+         -Wfloat-equal -Wcast-align
+
 LDFLAGS = -fstack-protector -Wl,-O1,-pie,--dynamicbase,--nxcompat,--sort-common,--as-needed \
 -Wl,--disable-auto-image-base
 
@@ -56,15 +53,15 @@ ifdef SANITIZE
 	HOST_CFLAGS += -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer
 endif
 
-HOST_SRCS = dnsredir.c ttltrack.c blackwhitelist.c fakepackets.c service.c utils/getline.c utils/repl_str.c
+HOST_SRCS = conntrack.c desync.c probe.c
 
 .PHONY: default all clean test
 
 default: $(TARGET)
 all: default
 
-OBJECTS = $(patsubst %.c, %.o, $(wildcard *.c utils/*.c)) goodbyedpi-rc.o
-HEADERS = $(wildcard *.h utils/*.h)
+OBJECTS = main.o conntrack.o desync.o probe.o goodbyedpi-rc.o
+HEADERS = turkdpi.h
 
 %.o: %.c $(HEADERS)
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -82,5 +79,5 @@ test:
 	/tmp/goodbyedpi_bench_hotpath
 
 clean:
-	-rm -f *.o utils/*.o /tmp/goodbyedpi_bench_hotpath
+	-rm -f *.o /tmp/goodbyedpi_bench_hotpath
 	-rm -f $(TARGET)

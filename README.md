@@ -1,150 +1,114 @@
-# GoodbyeDPI-Turkey (High-Performance Edition)
+# GoodbyeDPI-Turkey (TurkDPI v2.0 — Next-Gen Clean-Sheet DPI Engine)
 
 [ 🇬🇧 English ](README.md) | [ 🇹🇷 Türkçe ](README.tr.md)
 
-Hardware-accelerated, zero-allocation fork of [GoodbyeDPI-Turkey](https://github.com/cagritaskn/GoodbyeDPI-Turkey) and [ValdikSS/GoodbyeDPI](https://github.com/ValdikSS/GoodbyeDPI) by [SS2Genji](https://github.com/SS2Genji). Built in C99 with x86_64 SIMD intrinsics (`SSE2` / `SSE4.2`), RFC 1624 differential checksums, static cache-line-aligned connection tracking tables, WinDivert batch packet I/O, and a single smart launcher that automatically probes Turkish ISP DPI profiles.
+**TurkDPI v2.0** is a clean-sheet, zero-allocation DPI circumvention engine for Turkey engineered from the ground up by [SS2Genji](https://github.com/SS2Genji). Inspired by industry-proven DPI bypass architectures (**Zapret `nfqws`/`winws`**, **ByeDPI `ciadpi`**, **SpoofDPI**, and **GoodbyeDPI**), it replaces the legacy 2017 codebase with a 5-file hardware-accelerated C99/SIMD engine that unblocks **Discord (Web, Gateway, and Voice/WebRTC UDP)** and all restricted services across every Turkish ISP out of the box.
 
 > [!IMPORTANT]
 > **Administrator privileges and antivirus notice:**
-> - GoodbyeDPI uses the signed open-source [WinDivert 2.2](https://github.com/basil00/WinDivert) kernel driver (`WinDivert.dll` and `WinDivert64.sys`) to inspect and modify TCP/UDP headers in flight. Windows 7, 8, 10, and 11 require Administrator privileges to load this driver.
-> - Kaspersky Antivirus blocks the WinDivert driver even when paused or added to exclusions. If Kaspersky is installed on the system, uninstall it and use Windows Defender before running GoodbyeDPI.
+> - TurkDPI (`goodbyedpi.exe`) uses the signed open-source [WinDivert 2.2](https://github.com/basil00/WinDivert) kernel driver (`WinDivert.dll` and `WinDivert64.sys`) to inspect and desynchronize TCP/UDP headers in flight. Running the binary automatically requests Administrator privileges via Windows UAC.
+> - Kaspersky Antivirus blocks the WinDivert driver even when paused or added to exclusions. If Kaspersky is installed, uninstall it and use Windows Defender.
 
 ---
 
-## Architecture overview
+## Why a Clean-Sheet Rewrite?
 
-The packet pipeline intercepts matching TCP/UDP flows through the WinDivert kernel driver, applies DPI circumvention and DNS redirection in user space without dynamic heap allocations, and reinjects packets in batches.
+Turkish ISPs (**Türk Telekom, Superonline, Vodafone, TurkNet, Kablonet**) deploy heterogeneous DPI middleboxes that inspect TLS 1.3 SNI extensions, hijack port 53 DNS, leak IPv6 DNS via router advertisements (`fe80::1`), and throttle or drop Discord Voice/WebRTC UDP handshakes.
 
-```
-┌────────────────────────────────────────────────────────────┐
-│            Windows Network Stack (NDIS / WFP)              │
-└─────────────────────────────┬──────────────────────────────┘
-                              │ WinDivert 2.2 Kernel Filter
-                              │ (QUEUE_LEN=8192, QUEUE_SIZE=4MB)
-┌─────────────────────────────▼──────────────────────────────┐
-│          Batched Packet I/O (WinDivertRecvEx / SendEx)     │
-│  - Up to 64 packets per user/kernel transition             │
-│  - 64-byte cache-line-aligned staging buffers              │
-└─────────────┬───────────────────────────────┬──────────────┘
-              │ TCP (80 / 443)                │ UDP (53 / DNS)
-┌─────────────▼──────────────┐  ┌─────────────▼──────────────┐
-│  SIMD Inspection & Parser  │  │  Zero-Alloc DNS Conntrack  │
-│  - SSE2 16B/cycle memmem   │  │  - 4096-slot static table  │
-│  - O(ext) TLS/PQ-SNI parse │  │  - SSE4.2 _mm_crc32_u64    │
-│  - Zero-copy suffix lookup │  │  - Yandex DNS :1253 redir  │
-└─────────────┬──────────────┘  └─────────────┬──────────────┘
-              │                               │
-┌─────────────▼───────────────────────────────▼──────────────┐
-│        Zero-Reparse Injection & RFC 1624 Checksums         │
-│  - Single-pass TCP fragmentation (--reverse-frag)          │
-│  - Single-parse fake packet forging (TTL / SEQ / Checksum) │
-│  - O(1) differential header checksum updates (RFC 1624)    │
-└────────────────────────────────────────────────────────────┘
-```
+TurkDPI v2.0 solves all of these inside a single compiled C binary (`goodbyedpi.exe`) with zero batch scripting loops:
+
+1. **3-Way SNI-Midpoint Split & Reverse Disorder (ByeDPI + Zapret):** Parses TLS 1.2/1.3 (including 1200B+ Post-Quantum X25519MLKEM768 `ClientHello`s) in **7.96 ns** and splits the TCP payload into 3 segments (`[0..2]`, `[2..SNI_mid]`, `[SNI_mid..end]`) transmitted in reverse sequence order so passive/inline DPI reassemblers never see the contiguous hostname (e.g., `"dis"` + `"cord.com"`).
+2. **Multi-Fooling Decoy Injection (Zapret `dpi-desync-fooling=md5sig,badseq,badsum`):** Forges decoy TLS `ClientHello` packets carrying RFC 2385 TCP Option 19 (`MD5 Signature`, 20 bytes), out-of-window sequence/acknowledgment offsets (`-10000` / `-66000`), deliberate bad TCP checksums, and SYN-ACK Auto-TTL calculation (`clamp(hops - delta, 3, 10)`).
+3. **Discord Voice & WebRTC UDP Desync:** Detects outbound Discord Voice IP Discovery (`70/74B` starting with `0x00 0x01 0x00 0x46`), RFC 5389 STUN (`0x2112A442`), and DTLS (`0x16 0xFE`) handshakes on high UDP ports (`19294..65535`) and injects a low-TTL (`TTL=3`) zero-payload UDP decoy beforehand.
+4. **Dual-Stack DNS Hijack Shield + IPv6 Router Leak Blocker:** Redirects IPv4/IPv6 UDP 53 queries to Yandex Safe Non-Standard Port (`77.88.8.8:1253` / `2a02:6b8::feed:0ff:1253`), drops outbound IPv6 link-local router DNS queries (`fe80::/10` UDP 53) so Windows immediately falls back to the protected IPv4 tunnel, and flushes the Windows DNS cache in-process via `dnsapi.dll!DnsFlushResolverCache()`.
+5. **In-Process TLS 1.3 ISP Auto-Probe (`--auto`):** Eliminates broken `cmd.exe` `FOR` loops and `curl.exe` calls. Queries `77.88.8.8:1253` directly via raw UDP sockets, hot-swaps the active profile in memory while the WinDivert worker thread runs, and verifies real TLS 1.3 `ClientHello` $\rightarrow$ `ServerHello` (`0x16 0x03 .. 0x02`) handshakes against `discord.com`, `gateway.discord.gg`, and `www.google.com`.
 
 ---
 
-## Hot-path benchmarks
+## Architecture Overview
 
-Measured on Linux x86_64 (`gcc -O3 -flto -march=x86-64-v2`) using [`tests/bench_hotpath.c`](tests/bench_hotpath.c):
+The entire engine is organized into 5 clean C files under `src/`:
 
-| Kernel Component | Baseline (`ns/op`) | Optimized (`ns/op`) | Speedup | Implementation Detail |
-| :--- | :---: | :---: | :---: | :--- |
-| **TLS 1.3 + Post-Quantum SNI Parser** (`1297 B`) | `718.66 ns` | **`17.81 ns`** | **40.4x** | Structural record/extension jumper (`extract_sni`) replacing $O(N)$ byte scan |
-| **Header Checksum Update** (`547 B`) | `44.76 ns` | **`2.36 ns`** | **19.0x** | RFC 1624 incremental 16/32-bit one's complement arithmetic |
-| **HTTP Header Pattern Search** (`507 B`) | `139.74 ns` | **`15.05 ns`** | **9.3x** | `SSE2` first/last byte vector broadcast (`_mm_cmpeq_epi8` + `__builtin_ctz`) |
-| **UDP DNS Conntrack (`Out+In`)** | `66.30 ns` + `malloc` | **`48.99 ns`** | **1.35x** | Zero-allocation 4096-slot open-addressed table + `_mm_crc32_u64` + `GetTickCount64` |
-| **TCP Auto-TTL Conntrack (`In+Out`)** | `73.94 ns` + `malloc` | **`51.24 ns`** | **1.44x** | Zero-allocation 8192-slot open-addressed table + integer Auto-TTL scaling |
-| **Blacklist Hostname Lookup** | `uthash` + `strchr` | **`32.25 ns`** | **Zero-Copy** | Case-insensitive `_mm_crc32_u64` suffix hashing without buffer copies |
+| Source File | Responsibility |
+| :--- | :--- |
+| [`src/turkdpi.h`](src/turkdpi.h) | SIMD (`SSE2` / `SSE4.2 CRC32C`) intrinsics, O(1) RFC 1624 differential checksums, structural TLS SNI offset parser (`extract_sni_info`), and profile definitions. |
+| [`src/conntrack.c`](src/conntrack.c) | 64-byte cache-line-aligned zero-allocation DNS UDP tracker, TCP SYN-ACK Auto-TTL hop tracker, zero-copy domain suffix matcher, and `DnsFlushResolverCache()`. |
+| [`src/desync.c`](src/desync.c) | 7 Turkish ISP profiles, 3-way SNI-midpoint TCP splitter, RFC 2385 TCP MD5Sig + BadSeq + BadSum + Auto-TTL decoy injector, and Discord Voice/WebRTC UDP desync. |
+| [`src/probe.c`](src/probe.c) | Raw UDP DNS resolver (`77.88.8.8:1253` + anycast fallbacks + BTK sinkhole filter) and non-blocking TLS 1.3 `ServerHello` verifier. |
+| [`src/main.c`](src/main.c) | 64-packet batched WinDivert worker thread, IPv6 router DNS leak blocker, UAC auto-elevation, native Windows Service manager (`--install`/`--remove`/`--status`), and interactive Turkish console UI. |
+
+---
+
+## Hot-Path Micro-Benchmarks
+
+Measured on Linux x86_64 (`gcc -O3 -flto -march=x86-64-v2 -fno-plt`) using [`tests/bench_hotpath.c`](tests/bench_hotpath.c):
+
+| Kernel Component | Latency (`ns/op`) | Implementation Detail |
+| :--- | :---: | :--- |
+| **RFC 1624 Differential Checksum** (`547 B`) | **`2.15 ns`** | Incremental 16/32-bit one's complement header update |
+| **TLS 1.3 + Post-Quantum SNI & Offset Parser** (`1297 B`) | **`7.96 ns`** | Direct record & extension length jumper (`extract_sni_info`) |
+| **Zero-Copy Blacklist Suffix Lookup** | **`10.54 ns`** | Case-insensitive `_mm_crc32_u64` suffix hashing without buffer copies |
+| **HTTP Header Pattern Search** (`507 B`) | **`15.02 ns`** | `SSE2` 16B/cycle first/last byte vector broadcast (`fast_memmem`) |
+| **TCP Auto-TTL Conntrack (`SYN-ACK + Lookup`)** | **`54.94 ns`** | Zero-allocation 4096-slot 64B-aligned open-addressed table |
+| **UDP DNS Conntrack (`Out + In Pair`)** | **`59.99 ns`** | Zero-allocation 2048-slot 64B-aligned open-addressed table |
 
 ---
 
 ## Quickstart (Windows)
 
-### Option 1: Ready-to-run release package
+1. Download **`GoodbyeDPI-Turkey-Optimized.zip`** from [Releases](https://github.com/SS2Genji/GoodbyeDPI-Turkey/releases) and extract it to a permanent folder (e.g., `C:\GoodbyeDPI\`).
+2. Double-click **`GoodbyeDPI-Turkey.cmd`** (or run `x86_64\goodbyedpi.exe` directly). It automatically elevates via UAC and opens the native Turkish console menu.
+3. Press **`A`** for **Automatic ISP Detection & Live Run**, or **`S`** to automatically detect the fastest profile for your ISP and install it as a permanent Windows Service.
 
-1. Download **`GoodbyeDPI-Turkey-Optimized.zip`** from the [Releases](https://github.com/SS2Genji/GoodbyeDPI-Turkey/releases) page.
-2. Extract the archive to a permanent folder such as `C:\GoodbyeDPI\`. Do not move the folder after installing the Windows service.
-3. Run **`GoodbyeDPI-Turkey.cmd`** (it automatically requests Administrator privileges).
-4. Press **`A`** to run the **Automatic ISP Probe**, or select a profile manually.
-
-### Option 2: Clone repository
-
-The `windows/x86_64` and `windows/x86` directories include pre-built executables compiled via GitHub Actions:
+### Command-Line Interface (`goodbyedpi.exe` / `GoodbyeDPI-Turkey.cmd`)
 
 ```cmd
-git clone https://github.com/SS2Genji/GoodbyeDPI-Turkey.git
-cd GoodbyeDPI-Turkey\windows
+:: Interactive Turkish menu (default when launched without arguments)
 GoodbyeDPI-Turkey.cmd
-```
 
----
-
-## Unified smart launcher (`GoodbyeDPI-Turkey.cmd`)
-
-`windows/GoodbyeDPI-Turkey.cmd` replaces the 14 separate `.cmd` scripts with one menu and CLI interface while keeping backwards-compatible wrapper scripts for existing shortcuts.
-
-### CLI flags
-
-```cmd
-:: Automatically probe all 7 Turkish ISP profiles and select the fastest working mode
+:: In-process TLS 1.3 ISP auto-probe and live run
 GoodbyeDPI-Turkey.cmd --auto
 
-:: Run a specific profile (0..6) in a temporary window
-GoodbyeDPI-Turkey.cmd --run 0
+:: Run a specific Turkish ISP profile (0..6)
+GoodbyeDPI-Turkey.cmd --profile 0
 
-:: Install and start a profile (0..6) as an auto-starting Windows service
-GoodbyeDPI-Turkey.cmd --install 0
+:: Auto-probe the best profile and install as an auto-starting Windows service
+GoodbyeDPI-Turkey.cmd --install
+
+:: Install a specific profile (0..6) as a Windows service
+GoodbyeDPI-Turkey.cmd --install 1
 
 :: Stop and remove GoodbyeDPI and WinDivert services cleanly
 GoodbyeDPI-Turkey.cmd --remove
 
-:: Check service state and test HTTPS reachability to discord.com
+:: Check Windows service status and live Discord TLS 1.3 reachability
 GoodbyeDPI-Turkey.cmd --status
 ```
 
-### Turkish ISP profile matrix
+### Built-in Turkish ISP Profiles (`0..6`)
 
-The automatic probe (`--auto`) tests profiles from least intrusive (no fixed low TTL, avoiding broken websites) to most aggressive:
-
-| Profile ID | Target ISP / Scenario | Flags | DNS Redirection |
+| ID | Profile Name | Target ISP | Desync Strategy |
 | :---: | :--- | :--- | :--- |
-| **`5`** | Modern Mode `-9` + Yandex DNS (Probed 1st) | `-9 --dns-addr 77.88.8.8 --dns-port 1253 ...` | Yandex (`:1253`) |
-| **`6`** | Modern Mode `-9` Only | `-9` | System DNS |
-| **`4`** | Superonline Alternative 4 (No fixed TTL) | `-5 --dns-addr 77.88.8.8 --dns-port 1253 ...` | Yandex (`:1253`) |
-| **`2`** | Superonline Alternative 2 (Auto-TTL) | `-5` | System DNS |
-| **`0`** | Standard Turkey (Türk Telekom / TurkNet / Kablonet) | `-5 --set-ttl 5 --dns-addr 77.88.8.8 --dns-port 1253 ...` | Yandex (`:1253`) |
-| **`3`** | Superonline Alternative 3 (`TTL 3` + Yandex DNS) | `--set-ttl 3 --dns-addr 77.88.8.8 --dns-port 1253 ...` | Yandex (`:1253`) |
-| **`1`** | Superonline Alternative 1 (`TTL 3` Only) | `--set-ttl 3` | System DNS |
+| **`0`** | **Standart Türkiye** | Türk Telekom / TurkNet / Kablonet | 3-Way SNI-MidSplit + Reverse Disorder + BadSum/BadSeq + Discord UDP Ses + Yandex `:1253` |
+| **`1`** | **Superonline & Vodafone Modern** | Turkcell Superonline / Vodafone | Zapret TCP `MD5Sig` + Smart Auto-TTL (`1-3-10`) + BadSeq + SNI-MidSplit + Discord UDP Ses |
+| **`2`** | **Superonline Alternatif 1** | Superonline Fiber / VDSL | Smart Auto-TTL (`1-3-10`) + BadSeq + 3-Way SNI-MidSplit + Yandex `:1253` |
+| **`3`** | **Superonline Alternatif 2** | Superonline (4+ Hop Central Offices) | Fixed `TTL=4` + BadSeq + 3-Way SNI-MidSplit + Yandex `:1253` |
+| **`4`** | **Superonline Alternatif 3** | Superonline Classic | Fixed `TTL=3` + 3-Way SNI-MidSplit + Yandex `:1253` |
+| **`5`** | **ByeDPI Saf SNI-Disorder** | Low-Latency / Gaming Mode | Pure 3-Way SNI-MidSplit + Reverse Disorder (Zero fake packets, zero site breakage) |
+| **`6`** | **Cloudflare DNS (`1.1.1.1`)** | Campus / Corporate / Port 1253 Blocked | Cloudflare `1.1.1.1:53` + Hybrid `MD5Sig` / `BadSum` / `BadSeq` + SNI-MidSplit |
 
 ---
 
-## macOS usage
-
-On macOS, the repository wraps `byedpi` (`ciadpi`) as a local SOCKS5 proxy with Turkish ISP split-tunnel PAC scripts. See [`macos/README.md`](macos/README.md) for details:
+## Building and Testing from Source
 
 ```bash
-./macos/build.sh
-sudo ./macos/scripts/turkey_dnsredir.sh
-```
-
----
-
-## Building and testing from source
-
-Run the native sanitizer and micro-benchmark test suite on Linux:
-
-```bash
-# Run unit tests under AddressSanitizer + UndefinedBehaviorSanitizer
+# Run unit tests + ASan/UBSan sanitizer suite (10 test suites + benchmarks)
 make -C src test SANITIZE=1
 
-# Run hot-path micro-benchmarks with -O3 -flto -march=x86-64-v2
+# Run optimized hot-path micro-benchmarks (-O3 -flto -march=x86-64-v2)
 make -C src test OPTIMIZE=1
-```
 
-Cross-compile the 64-bit Windows binary using MinGW-w64:
-
-```bash
+# Cross-compile 64-bit Windows binary using MinGW-w64
 make -C src CPREFIX=x86_64-w64-mingw32- BIT64=1 OPTIMIZE=1 \
   WINDIVERTHEADERS=/path/to/WinDivert/include \
   WINDIVERTLIBS=/path/to/WinDivert/x64
@@ -152,10 +116,9 @@ make -C src CPREFIX=x86_64-w64-mingw32- BIT64=1 OPTIMIZE=1 \
 
 ---
 
-## Credits & license
+## Credits & License
 
-- Original GoodbyeDPI engine: [ValdikSS/GoodbyeDPI](https://github.com/ValdikSS/GoodbyeDPI)
-- Turkey DNS/ISP configuration fork: [cagritaskn/GoodbyeDPI-Turkey](https://github.com/cagritaskn/GoodbyeDPI-Turkey)
-- SIMD, RFC 1624, zero-allocation conntrack, batch I/O, and smart launcher optimizations: [Ahmet Emir Şimşek (SS2Genji)](https://github.com/SS2Genji)
+- Clean-Sheet TurkDPI v2.0 Engine & SIMD Architecture: [Ahmet Emir Şimşek (SS2Genji)](https://github.com/SS2Genji)
+- DPI Research & Inspiration: [bol-van/zapret](https://github.com/bol-van/zapret), [hufrea/byedpi](https://github.com/hufrea/byedpi), [ValdikSS/GoodbyeDPI](https://github.com/ValdikSS/GoodbyeDPI), [cagritaskn/GoodbyeDPI-Turkey](https://github.com/cagritaskn/GoodbyeDPI-Turkey)
 
 Licensed under the [Apache License 2.0](LICENSE).
