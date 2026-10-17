@@ -358,9 +358,10 @@ uint8_t tcp_get_auto_ttl(const uint8_t ttl, const uint8_t autottl1,
 #define HOST_TABLE_MASK (HOST_TABLE_SIZE - 1u)
 
 typedef struct {
-    const char *str;
-    uint16_t    len;
-    uint32_t    hash;
+    uint32_t offset;
+    uint32_t hash;
+    uint16_t len;
+    uint16_t _pad;
 } host_slot_t;
 
 static ALIGN64 host_slot_t g_host_table[HOST_TABLE_SIZE];
@@ -396,13 +397,14 @@ static inline int host_span_equals_ci(const char *stored_lower, const char *quer
 }
 
 static inline int host_table_lookup(const char *span, size_t len) {
-    if (len == 0 || len > HOST_MAXLEN) return 0;
+    if (len == 0 || len > HOST_MAXLEN || !g_host_arena) return 0;
     uint32_t h = hash_host_span_ci(span, len);
     for (uint32_t probe = 0; probe < 32; probe++) {
         uint32_t idx = (h + probe) & HOST_TABLE_MASK;
         const host_slot_t *slot = &g_host_table[idx];
-        if (!slot->str) return 0;
-        if (slot->hash == h && slot->len == len && host_span_equals_ci(slot->str, span, len))
+        if (slot->len == 0) return 0;
+        if (slot->hash == h && slot->len == len &&
+            host_span_equals_ci(g_host_arena + slot->offset, span, len))
             return 1;
     }
     return 0;
@@ -415,22 +417,17 @@ static int host_table_insert(const char *host, size_t len) {
     for (uint32_t probe = 0; probe < HOST_TABLE_SIZE; probe++) {
         uint32_t idx = (h + probe) & HOST_TABLE_MASK;
         host_slot_t *slot = &g_host_table[idx];
-        if (!slot->str) {
+        if (slot->len == 0) {
             if (g_host_arena_size + len + 1 > g_host_arena_cap) {
                 size_t new_cap = g_host_arena_cap ? g_host_arena_cap * 2 : (1024 * 1024);
                 while (new_cap < g_host_arena_size + len + 1) new_cap *= 2;
                 char *new_arena = (char *)realloc(g_host_arena, new_cap);
                 if (!new_arena) return 0;
-                if (g_host_arena && new_arena != g_host_arena) {
-                    ptrdiff_t delta = new_arena - g_host_arena;
-                    for (uint32_t j = 0; j < HOST_TABLE_SIZE; j++) {
-                        if (g_host_table[j].str) g_host_table[j].str += delta;
-                    }
-                }
                 g_host_arena = new_arena;
                 g_host_arena_cap = new_cap;
             }
-            char *dst = g_host_arena + g_host_arena_size;
+            uint32_t off = (uint32_t)g_host_arena_size;
+            char *dst = g_host_arena + off;
             for (size_t i = 0; i < len; i++) {
                 uint8_t c = (uint8_t)host[i];
                 if (c >= 'A' && c <= 'Z') c |= 0x20u;
@@ -439,12 +436,13 @@ static int host_table_insert(const char *host, size_t len) {
             dst[len] = '\0';
             g_host_arena_size += len + 1;
 
-            slot->str  = dst;
-            slot->len  = (uint16_t)len;
-            slot->hash = h;
+            slot->offset = off;
+            slot->len    = (uint16_t)len;
+            slot->hash   = h;
             return 1;
         }
-        if (slot->hash == h && slot->len == len && host_span_equals_ci(slot->str, host, len)) {
+        if (slot->hash == h && slot->len == len &&
+            host_span_equals_ci(g_host_arena + slot->offset, host, len)) {
             return 0;
         }
     }
