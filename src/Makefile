@@ -7,7 +7,7 @@ WINDIVERTLIBS = ../../binary
 MINGWLIB = /usr/x86_64-w64-mingw32/lib/
 
 TARGET = goodbyedpi.exe
-LIBS = -L$(WINDIVERTLIBS) -lWinDivert -lws2_32 -ladvapi32 -lshell32 -l:libssp.a
+LIBS = -L$(WINDIVERTLIBS) -lWinDivert -lws2_32 -ladvapi32 -lshell32 -luser32 -l:libssp.a
 CC = $(CPREFIX)gcc
 
 CCWINDRES = $(CPREFIX)windres
@@ -16,14 +16,14 @@ ifeq (, $(shell which $(CPREFIX)windres))
 endif
 
 CFLAGS = -std=c99 -pie -fPIE -pipe -I$(WINDIVERTHEADERS) -L$(WINDIVERTLIBS) \
-         -O2 -D_FORTIFY_SOURCE=2 -D_WIN32_WINNT=0x0601 -fstack-protector \
+         -O2 -D_FORTIFY_SOURCE=2 -D_WIN32_WINNT=0x0601 -D__USE_MINGW_ANSI_STDIO=1 -fstack-protector \
          -Wall -Wextra -Wformat=2 -Wformat-overflow=2 -Wformat-truncation=2 \
          -Wformat-security -Wno-format-nonliteral -Wshadow -Wstrict-aliasing=1 \
          -Wnull-dereference -Warray-bounds=2 -Wimplicit-fallthrough=3 \
          -Wstringop-overflow=4 -Wstrict-overflow=2 -Wcast-align=strict \
          -Wfloat-equal -Wcast-align
 
-LDFLAGS = -fstack-protector -Wl,-O1,-pie,--dynamicbase,--nxcompat,--sort-common,--as-needed \
+LDFLAGS = -mwindows -fstack-protector -Wl,-O1,-pie,--dynamicbase,--nxcompat,--sort-common,--as-needed \
 -Wl,--disable-auto-image-base
 
 ifdef BIT64

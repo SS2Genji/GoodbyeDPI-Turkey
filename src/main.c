@@ -16,6 +16,7 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <string.h>
+#include <wchar.h>
 #include <ctype.h>
 #include <signal.h>
 #include <unistd.h>
@@ -571,6 +572,38 @@ static void sigint_handler(int sig) {
 
 #if defined(_WIN32) && !defined(_SHIM_WINDOWS_H)
 
+#define WM_TRAYICON             (WM_APP + 1)
+#define WM_TRAY_ALREADY_RUNNING (WM_APP + 2)
+#define TRAY_ICON_ID            1
+
+#define ID_TRAY_PROFILE_BASE    1000
+#define ID_TRAY_AUTO            1010
+#define ID_TRAY_TEST            1011
+#define ID_TRAY_TOGGLE          1012
+#define ID_TRAY_AUTOSTART       1013
+#define ID_TRAY_CLEANUP         1014
+#define ID_TRAY_EXIT            1015
+
+#define CONFIG_FILE_NAME        "turkdpi.cfg"
+#define AUTOSTART_TASK_NAME     "TurkDPI_Autostart"
+
+static HANDLE          g_worker_thread = NULL;
+static HWND            g_tray_hwnd     = NULL;
+static NOTIFYICONDATAW g_nid;
+static volatile int    g_current_profile_idx = 0;
+static volatile int    g_probing             = 0;
+static int             g_autostart_enabled   = 0;
+
+static const wchar_t *g_profile_labels_w[TURKDPI_NUM_PROFILES] = {
+    L"[0] Standart Türkiye (TT / TurkNet / Kablonet)",
+    L"[1] Superonline & Vodafone Modern (MD5Sig + Auto-TTL)",
+    L"[2] Superonline Alternatif 1 (Auto-TTL + BadSeq)",
+    L"[3] Superonline Alternatif 2 (Sabit TTL 4 + BadSeq)",
+    L"[4] Superonline Alternatif 3 (Klasik TTL 3)",
+    L"[5] ByeDPI Saf SNI-Disorder (Oyun Modu - Sahte Paketsiz)",
+    L"[6] Cloudflare DNS (1.1.1.1) + Hibrit (Yurt / Kampüs)"
+};
+
 static int is_process_elevated(void) {
     BOOL is_elevated = FALSE;
     HANDLE h_token = NULL;
@@ -612,7 +645,6 @@ static void ensure_admin_privileges(int argc, char *argv[]) {
         snprintf(params + cur, sizeof(params) - cur, "%s\"%s\"", (i > 1 ? " " : ""), argv[i]);
     }
 
-    printf("[*] Yonetici yetkisi (UAC) isteniyor...\n");
     SHELLEXECUTEINFOA sei;
     memset(&sei, 0, sizeof(sei));
     sei.cbSize       = sizeof(sei);
@@ -620,15 +652,59 @@ static void ensure_admin_privileges(int argc, char *argv[]) {
     sei.lpFile       = exe_path;
     sei.lpParameters = params[0] ? params : NULL;
     sei.lpDirectory  = exe_dir;
-    sei.nShow        = SW_SHOWNORMAL;
+    sei.nShow        = SW_HIDE;
 
     if (ShellExecuteExA(&sei)) {
         exit(EXIT_SUCCESS);
     }
 }
 
+static int run_hidden_cmd(const char *cmdline) {
+    char buf[1024];
+    snprintf(buf, sizeof(buf), "%s", cmdline);
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    memset(&si, 0, sizeof(si));
+    memset(&pi, 0, sizeof(pi));
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE;
+
+    if (!CreateProcessA(NULL, buf, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
+        return -1;
+    }
+    WaitForSingleObject(pi.hProcess, 5000);
+    DWORD exit_code = 1;
+    GetExitCodeProcess(pi.hProcess, &exit_code);
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+    return (int)exit_code;
+}
+
+static int check_autostart_task(void) {
+    return run_hidden_cmd("schtasks /query /tn \"" AUTOSTART_TASK_NAME "\"") == 0;
+}
+
+static int set_autostart_task(int enable) {
+    if (!enable) {
+        run_hidden_cmd("schtasks /delete /tn \"" AUTOSTART_TASK_NAME "\" /f");
+        g_autostart_enabled = 0;
+        return 0;
+    }
+    char exe_path[MAX_PATH];
+    if (!GetModuleFileNameA(NULL, exe_path, MAX_PATH)) return -1;
+    char cmd[MAX_PATH + 256];
+    snprintf(cmd, sizeof(cmd),
+             "schtasks /create /tn \"" AUTOSTART_TASK_NAME "\" /tr \"\\\"%s\\\"\" /sc onlogon /rl highest /f",
+             exe_path);
+    if (run_hidden_cmd(cmd) == 0) {
+        g_autostart_enabled = 1;
+        return 0;
+    }
+    return -1;
+}
+
 static int scm_remove_service(void) {
-    printf("\n[*] GoodbyeDPI Windows Hizmeti ve WinDivert surucusu kaldiriliyor...\n");
     SC_HANDLE scm = OpenSCManagerA(NULL, NULL, SC_MANAGER_ALL_ACCESS);
     if (scm) {
         const char *svc_names[] = { SERVICE_NAME, "WinDivert", "WinDivert14" };
@@ -643,215 +719,379 @@ static int scm_remove_service(void) {
         }
         CloseServiceHandle(scm);
     }
+    set_autostart_task(0);
+    DeleteFileA(CONFIG_FILE_NAME);
     flush_dns_cache();
-    printf("[+] GoodbyeDPI hizmeti ve WinDivert suruculeri basariyla kaldirildi.\n");
     return 0;
 }
 
-static int scm_install_service(int profile_idx) {
-    if (profile_idx < 0 || profile_idx >= TURKDPI_NUM_PROFILES) profile_idx = 0;
-
-    char exe_path[MAX_PATH];
-    if (!GetModuleFileNameA(NULL, exe_path, MAX_PATH)) {
-        printf("[!] HATA: Calistirilabilir dosya yolu alinamadi.\n");
-        return -1;
-    }
-
-    scm_remove_service();
-    Sleep(300);
-
-    char bin_path[MAX_PATH + 64];
-    snprintf(bin_path, sizeof(bin_path), "\"%s\" --service --profile %d", exe_path, profile_idx);
-
-    SC_HANDLE scm = OpenSCManagerA(NULL, NULL, SC_MANAGER_CREATE_SERVICE);
-    if (!scm) {
-        printf("[!] HATA: Service Control Manager acilamadi (Hata: %lu).\n", (unsigned long)GetLastError());
-        return -1;
-    }
-
-    SC_HANDLE svc = CreateServiceA(
-        scm,
-        SERVICE_NAME,
-        "GoodbyeDPI-Turkey (TurkDPI Engine)",
-        SERVICE_ALL_ACCESS,
-        SERVICE_WIN32_OWN_PROCESS,
-        SERVICE_AUTO_START,
-        SERVICE_ERROR_NORMAL,
-        bin_path,
-        NULL, NULL, NULL, NULL, NULL
-    );
-
-    if (!svc) {
-        printf("[!] HATA: Hizmet olusturulamadi (Hata: %lu).\n", (unsigned long)GetLastError());
-        CloseServiceHandle(scm);
-        return -1;
-    }
-
-    StartServiceA(svc, 0, NULL);
-    CloseServiceHandle(svc);
-    CloseServiceHandle(scm);
-    flush_dns_cache();
-
-    printf("\n[+] BASARILI! GoodbyeDPI Windows Hizmeti kuruldu ve baslatildi!\n");
-    printf("    Aktif Profil : [Profil %d] %s\n", profile_idx, g_turkdpi_profiles[profile_idx].name);
-    printf("    Baslangic    : Otomatik (Her bilgisayari actiginizda arka planda calisir)\n");
-    return 0;
-}
-
-static void scm_show_status(void) {
-    printf("\n============================================================================\n");
-    printf("  TurkDPI Hizmet ve Canli Discord Baglanti Durumu\n");
-    printf("============================================================================\n");
-
+static void stop_conflicting_windows_service(void) {
     SC_HANDLE scm = OpenSCManagerA(NULL, NULL, SC_MANAGER_CONNECT);
     if (scm) {
-        SC_HANDLE svc = OpenServiceA(scm, SERVICE_NAME, SERVICE_QUERY_STATUS);
+        SC_HANDLE svc = OpenServiceA(scm, SERVICE_NAME, SERVICE_STOP | DELETE);
         if (svc) {
             SERVICE_STATUS st;
-            if (QueryServiceStatus(svc, &st)) {
-                printf("  [*] Windows Hizmeti (GoodbyeDPI): %s\n",
-                       st.dwCurrentState == SERVICE_RUNNING ? "AKTIF (CALISIYOR)" : "DURDURULMUS");
-            }
+            ControlService(svc, SERVICE_CONTROL_STOP, &st);
+            DeleteService(svc);
             CloseServiceHandle(svc);
-        } else {
-            printf("  [*] Windows Hizmeti (GoodbyeDPI): KURULU DEGIL\n");
         }
         CloseServiceHandle(scm);
     }
+}
 
+static int load_saved_profile(int *has_saved) {
+    *has_saved = 0;
+    FILE *fp = fopen(CONFIG_FILE_NAME, "r");
+    if (!fp) return 0;
+    int idx = 0;
+    if (fscanf(fp, "%d", &idx) == 1 && idx >= 0 && idx < TURKDPI_NUM_PROFILES) {
+        *has_saved = 1;
+        fclose(fp);
+        return idx;
+    }
+    fclose(fp);
+    return 0;
+}
+
+static void save_selected_profile(int idx) {
+    FILE *fp = fopen(CONFIG_FILE_NAME, "w");
+    if (fp) {
+        fprintf(fp, "%d\n", idx);
+        fclose(fp);
+    }
+}
+
+/* ============================================================================
+ * 4. Native Win32 System Tray Engine & Right-Click Menu
+ * ============================================================================ */
+static void tray_show_balloon(const wchar_t *title, const wchar_t *msg, DWORD info_flags) {
+    if (!g_tray_hwnd) return;
+    g_nid.uFlags      = NIF_INFO | NIF_TIP;
+    g_nid.dwInfoFlags = info_flags;
+    wcsncpy(g_nid.szInfoTitle, title, 63);
+    g_nid.szInfoTitle[63] = L'\0';
+    wcsncpy(g_nid.szInfo, msg, 255);
+    g_nid.szInfo[255] = L'\0';
+    Shell_NotifyIconW(NIM_MODIFY, &g_nid);
+}
+
+static void tray_update_tooltip(void) {
+    if (!g_tray_hwnd) return;
+    g_nid.uFlags = NIF_TIP;
+    if (g_probing) {
+        swprintf(g_nid.szTip, 127, L"TurkDPI v2.0 — İSS Analiz Ediliyor...");
+    } else if (g_w_filter != INVALID_HANDLE_VALUE) {
+        swprintf(g_nid.szTip, 127, L"TurkDPI v2.0 — Aktif [Profil %d]", g_current_profile_idx);
+    } else {
+        swprintf(g_nid.szTip, 127, L"TurkDPI v2.0 — Duraklatıldı");
+    }
+    g_nid.szTip[127] = L'\0';
+    Shell_NotifyIconW(NIM_MODIFY, &g_nid);
+}
+
+static int start_engine_bg(void) {
+    if (g_w_filter != INVALID_HANDLE_VALUE) return 1;
+    g_exiting = 0;
+    g_w_filter = open_divert_handle(TURKDPI_MAIN_FILTER, 0);
+    if (g_w_filter == INVALID_HANDLE_VALUE) {
+        tray_update_tooltip();
+        return 0;
+    }
+    flush_dns_cache();
+    g_worker_thread = CreateThread(NULL, 0, engine_worker_thread, NULL, 0, NULL);
+    tray_update_tooltip();
+    return 1;
+}
+
+static void stop_engine_bg(void) {
+    g_exiting = 1;
+    if (g_w_filter != INVALID_HANDLE_VALUE) {
+        WinDivertShutdown(g_w_filter, WINDIVERT_SHUTDOWN_BOTH);
+        WinDivertClose(g_w_filter);
+        g_w_filter = INVALID_HANDLE_VALUE;
+    }
+    if (g_worker_thread) {
+        WaitForSingleObject(g_worker_thread, 1500);
+        CloseHandle(g_worker_thread);
+        g_worker_thread = NULL;
+    }
+    tray_update_tooltip();
+}
+
+static DWORD WINAPI tray_autoprobe_thread(PVOID arg) {
+    (void)arg;
+    if (g_probing) return 0;
+    g_probing = 1;
+    start_engine_bg();
+    tray_update_tooltip();
+
+    int best = probe_find_best_profile(&g_active_profile);
+    g_current_profile_idx = best;
+    g_active_profile = &g_turkdpi_profiles[best];
+    save_selected_profile(best);
+    flush_dns_cache();
+
+    g_probing = 0;
+    tray_update_tooltip();
+
+    wchar_t msg[256];
+    swprintf(msg, 255, L"%ls aktif edildi.\nDiscord (Web + Ses) ve tüm engelli uygulamalar açık!",
+             g_profile_labels_w[best]);
+    tray_show_balloon(L"TurkDPI — En Uygun Profil Bulundu", msg, NIIF_INFO);
+    return 0;
+}
+
+static DWORD WINAPI tray_test_thread(PVOID arg) {
+    (void)arg;
     uint32_t dip = probe_resolve_domain("discord.com", 0xE8879FA2u);
     int ms = probe_test_https_target(dip, 443, "discord.com", 2000);
+    wchar_t msg[256];
     if (ms > 0) {
-        printf("  [+] Discord TLS 1.3 Erisimi     : ACIK (%d ms)\n", ms);
+        swprintf(msg, 255, L"Discord TLS 1.3 Erişimi: AÇIK (%d ms)\nAktif: %ls",
+                 ms, g_profile_labels_w[g_current_profile_idx]);
+        tray_show_balloon(L"TurkDPI — Bağlantı Testi Başarılı", msg, NIIF_INFO);
     } else {
-        printf("  [-] Discord TLS 1.3 Erisimi     : KAPALI (Bir profil baslatin veya [A] Otomatik Algilama secin)\n");
+        swprintf(msg, 255, L"Discord TLS 1.3 yanıtı alınamadı.\nMenüden 'Otomatik İSS Algıla' seçeneğine tıklayın.");
+        tray_show_balloon(L"TurkDPI — Bağlantı Uyarısı", msg, NIIF_WARNING);
     }
-    printf("============================================================================\n");
+    return 0;
 }
 
-/* Windows Service Control Dispatcher glue */
-static SERVICE_STATUS        g_svc_status;
-static SERVICE_STATUS_HANDLE g_svc_status_handle;
+static void show_tray_context_menu(HWND hwnd) {
+    HMENU h_menu = CreatePopupMenu();
+    if (!h_menu) return;
 
-static void WINAPI svc_ctrl_handler(DWORD ctrl) {
-    if (ctrl == SERVICE_CONTROL_STOP || ctrl == SERVICE_CONTROL_SHUTDOWN) {
-        g_svc_status.dwCurrentState  = SERVICE_STOP_PENDING;
-        g_svc_status.dwWin32ExitCode = 0;
-        SetServiceStatus(g_svc_status_handle, &g_svc_status);
-        deinit_all();
-        g_svc_status.dwCurrentState = SERVICE_STOPPED;
-        SetServiceStatus(g_svc_status_handle, &g_svc_status);
+    wchar_t status_line[128];
+    if (g_probing) {
+        swprintf(status_line, 127, L"⏳ TurkDPI v2.0 — İSS Profili Taranıyor...");
+    } else if (g_w_filter != INVALID_HANDLE_VALUE) {
+        swprintf(status_line, 127, L"● TurkDPI v2.0 — Aktif [Profil %d]", g_current_profile_idx);
+    } else {
+        swprintf(status_line, 127, L"○ TurkDPI v2.0 — Duraklatıldı");
     }
-}
+    AppendMenuW(h_menu, MF_STRING | MF_DISABLED | MF_GRAYED, 0, status_line);
+    AppendMenuW(h_menu, MF_SEPARATOR, 0, NULL);
 
-static void WINAPI svc_main(DWORD dwArgc, LPSTR *lpszArgv) {
-    (void)dwArgc; (void)lpszArgv;
-    g_svc_status_handle = RegisterServiceCtrlHandlerA(SERVICE_NAME, svc_ctrl_handler);
-    if (!g_svc_status_handle) return;
+    AppendMenuW(h_menu, MF_STRING | (g_probing ? MF_GRAYED : 0),
+                ID_TRAY_AUTO, L"⚡ Otomatik İSS Algıla (En Hızlı Profili Bul)");
+    AppendMenuW(h_menu, MF_STRING,
+                ID_TRAY_TEST, L"🔍 Discord & TLS 1.3 Bağlantısını Test Et");
+    AppendMenuW(h_menu, MF_SEPARATOR, 0, NULL);
 
-    g_svc_status.dwServiceType      = SERVICE_WIN32_OWN_PROCESS;
-    g_svc_status.dwCurrentState     = SERVICE_RUNNING;
-    g_svc_status.dwControlsAccepted = SERVICE_ACCEPT_STOP | SERVICE_ACCEPT_SHUTDOWN;
-    SetServiceStatus(g_svc_status_handle, &g_svc_status);
+    for (int i = 0; i < TURKDPI_NUM_PROFILES; i++) {
+        UINT flags = MF_STRING;
+        if (i == g_current_profile_idx && g_w_filter != INVALID_HANDLE_VALUE) {
+            flags |= MF_CHECKED;
+        }
+        AppendMenuW(h_menu, flags, ID_TRAY_PROFILE_BASE + i, g_profile_labels_w[i]);
+    }
 
-    g_w_filter = open_divert_handle(TURKDPI_MAIN_FILTER, 0);
+    AppendMenuW(h_menu, MF_SEPARATOR, 0, NULL);
     if (g_w_filter != INVALID_HANDLE_VALUE) {
-        flush_dns_cache();
-        engine_worker_thread(NULL);
+        AppendMenuW(h_menu, MF_STRING, ID_TRAY_TOGGLE, L"⏸ DPI Filtresini Duraklat");
+    } else {
+        AppendMenuW(h_menu, MF_STRING, ID_TRAY_TOGGLE, L"▶ DPI Filtresini Başlat");
     }
 
-    g_svc_status.dwCurrentState = SERVICE_STOPPED;
-    SetServiceStatus(g_svc_status_handle, &g_svc_status);
+    AppendMenuW(h_menu, MF_STRING | (g_autostart_enabled ? MF_CHECKED : 0),
+                ID_TRAY_AUTOSTART, L"🚀 Windows Açılışında Otomatik Başlat");
+    AppendMenuW(h_menu, MF_STRING,
+                ID_TRAY_CLEANUP, L"🧹 Sürücü ve Ayarları Sıfırla (Tamamen Kaldır)");
+    AppendMenuW(h_menu, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(h_menu, MF_STRING, ID_TRAY_EXIT, L"❌ Çıkış");
+
+    POINT pt;
+    GetCursorPos(&pt);
+    SetForegroundWindow(hwnd);
+    TrackPopupMenu(h_menu, TPM_RIGHTBUTTON | TPM_BOTTOMALIGN, pt.x, pt.y, 0, hwnd, NULL);
+    PostMessageW(hwnd, WM_NULL, 0, 0);
+    DestroyMenu(h_menu);
 }
 
-static int run_as_service(void) {
-    char svc_name[] = SERVICE_NAME;
-    SERVICE_TABLE_ENTRYA ste[] = {
-        { svc_name, (LPSERVICE_MAIN_FUNCTIONA)svc_main },
-        { NULL, NULL }
-    };
-    return StartServiceCtrlDispatcherA(ste);
+static LRESULT CALLBACK tray_wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
+    static UINT s_wm_taskbar_restart = 0;
+
+    switch (msg) {
+        case WM_CREATE:
+            s_wm_taskbar_restart = RegisterWindowMessageW(L"TaskbarCreated");
+            return 0;
+
+        case WM_TRAYICON:
+            if (lparam == WM_RBUTTONUP || lparam == WM_LBUTTONUP || lparam == WM_CONTEXTMENU) {
+                show_tray_context_menu(hwnd);
+            }
+            return 0;
+
+        case WM_TRAY_ALREADY_RUNNING:
+            tray_show_balloon(L"TurkDPI Zaten Çalışıyor",
+                              L"Sağ alt köşedeki (System Tray) TurkDPI simgesine sağ tıklayarak ayarları değiştirebilirsiniz.",
+                              NIIF_INFO);
+            return 0;
+
+        case WM_COMMAND: {
+            UINT cmd = LOWORD(wparam);
+            if (cmd >= ID_TRAY_PROFILE_BASE && cmd < ID_TRAY_PROFILE_BASE + TURKDPI_NUM_PROFILES) {
+                int idx = (int)(cmd - ID_TRAY_PROFILE_BASE);
+                g_current_profile_idx = idx;
+                g_active_profile = &g_turkdpi_profiles[idx];
+                save_selected_profile(idx);
+                if (g_w_filter == INVALID_HANDLE_VALUE) {
+                    start_engine_bg();
+                } else {
+                    flush_dns_cache();
+                    tray_update_tooltip();
+                }
+                tray_show_balloon(L"TurkDPI — Profil Değiştirildi", g_profile_labels_w[idx], NIIF_INFO);
+            } else if (cmd == ID_TRAY_AUTO) {
+                tray_show_balloon(L"TurkDPI — Otomatik İSS Algılama",
+                                  L"İSS'niz için en hızlı çalışan profil test ediliyor, lütfen birkaç saniye bekleyin...",
+                                  NIIF_INFO);
+                HANDLE ht = CreateThread(NULL, 0, tray_autoprobe_thread, NULL, 0, NULL);
+                if (ht) CloseHandle(ht);
+            } else if (cmd == ID_TRAY_TEST) {
+                HANDLE ht = CreateThread(NULL, 0, tray_test_thread, NULL, 0, NULL);
+                if (ht) CloseHandle(ht);
+            } else if (cmd == ID_TRAY_TOGGLE) {
+                if (g_w_filter != INVALID_HANDLE_VALUE) {
+                    stop_engine_bg();
+                    tray_show_balloon(L"TurkDPI — Duraklatıldı",
+                                      L"DPI filtresi geçici olarak duraklatıldı.",
+                                      NIIF_WARNING);
+                } else {
+                    if (start_engine_bg()) {
+                        tray_show_balloon(L"TurkDPI — Aktif",
+                                          g_profile_labels_w[g_current_profile_idx],
+                                          NIIF_INFO);
+                    }
+                }
+            } else if (cmd == ID_TRAY_AUTOSTART) {
+                if (set_autostart_task(!g_autostart_enabled) == 0) {
+                    tray_show_balloon(L"TurkDPI — Başlangıç Ayarı",
+                                      g_autostart_enabled
+                                          ? L"Windows açıldığında sağ alt tepside otomatik başlayacak."
+                                          : L"Windows açılışında otomatik başlatma kapatıldı.",
+                                      NIIF_INFO);
+                }
+            } else if (cmd == ID_TRAY_CLEANUP) {
+                stop_engine_bg();
+                scm_remove_service();
+                Shell_NotifyIconW(NIM_DELETE, &g_nid);
+                PostQuitMessage(0);
+            } else if (cmd == ID_TRAY_EXIT) {
+                stop_engine_bg();
+                Shell_NotifyIconW(NIM_DELETE, &g_nid);
+                PostQuitMessage(0);
+            }
+            return 0;
+        }
+
+        case WM_DESTROY:
+            Shell_NotifyIconW(NIM_DELETE, &g_nid);
+            PostQuitMessage(0);
+            return 0;
+
+        default:
+            if (s_wm_taskbar_restart != 0 && msg == s_wm_taskbar_restart) {
+                Shell_NotifyIconW(NIM_ADD, &g_nid);
+                return 0;
+            }
+            return DefWindowProcW(hwnd, msg, wparam, lparam);
+    }
+}
+
+static int run_system_tray_app(int initial_profile, int force_auto) {
+    HANDLE h_mutex = CreateMutexW(NULL, TRUE, L"Local\\TurkDPI_Tray_Instance");
+    if (h_mutex && GetLastError() == ERROR_ALREADY_EXISTS) {
+        HWND existing = FindWindowW(L"TurkDPI_Tray_Class", NULL);
+        if (existing) {
+            PostMessageW(existing, WM_TRAY_ALREADY_RUNNING, 0, 0);
+        }
+        CloseHandle(h_mutex);
+        return 0;
+    }
+
+    stop_conflicting_windows_service();
+    g_autostart_enabled = check_autostart_task();
+
+    int has_saved = 0;
+    if (initial_profile >= 0 && initial_profile < TURKDPI_NUM_PROFILES) {
+        g_current_profile_idx = initial_profile;
+        has_saved = 1;
+    } else {
+        g_current_profile_idx = load_saved_profile(&has_saved);
+    }
+    g_active_profile = &g_turkdpi_profiles[g_current_profile_idx];
+
+    HINSTANCE h_inst = GetModuleHandleW(NULL);
+    WNDCLASSEXW wc;
+    memset(&wc, 0, sizeof(wc));
+    wc.cbSize        = sizeof(wc);
+    wc.lpfnWndProc   = tray_wnd_proc;
+    wc.hInstance     = h_inst;
+    wc.lpszClassName = L"TurkDPI_Tray_Class";
+    RegisterClassExW(&wc);
+
+    g_tray_hwnd = CreateWindowExW(0, L"TurkDPI_Tray_Class", L"TurkDPI", 0,
+                                  0, 0, 0, 0, NULL, NULL, h_inst, NULL);
+    if (!g_tray_hwnd) {
+        if (h_mutex) CloseHandle(h_mutex);
+        return 1;
+    }
+
+    memset(&g_nid, 0, sizeof(g_nid));
+    g_nid.cbSize           = sizeof(g_nid);
+    g_nid.hWnd             = g_tray_hwnd;
+    g_nid.uID              = TRAY_ICON_ID;
+    g_nid.uFlags           = NIF_ICON | NIF_MESSAGE | NIF_TIP;
+    g_nid.uCallbackMessage = WM_TRAYICON;
+    g_nid.hIcon            = LoadIconW(h_inst, MAKEINTRESOURCEW(1));
+    if (!g_nid.hIcon) {
+        g_nid.hIcon = LoadIconW(NULL, (LPCWSTR)IDI_APPLICATION);
+    }
+    swprintf(g_nid.szTip, 127, L"TurkDPI v2.0 — Başlatılıyor...");
+    Shell_NotifyIconW(NIM_ADD, &g_nid);
+
+    if (!start_engine_bg()) {
+        MessageBoxW(NULL,
+                    L"WinDivert sürücüsü başlatılamadı!\nWinDivert.dll ve WinDivert64.sys dosyalarının programla aynı klasörde olduğundan emin olun.",
+                    L"TurkDPI Hatası", MB_ICONERROR | MB_OK);
+        Shell_NotifyIconW(NIM_DELETE, &g_nid);
+        if (h_mutex) CloseHandle(h_mutex);
+        return 1;
+    }
+
+    if (force_auto || !has_saved) {
+        /* First run or --auto: automatically probe best ISP profile in background */
+        tray_show_balloon(L"TurkDPI — Otomatik İSS Algılama",
+                          L"İlk çalıştırma: İSS'niz için en hızlı Discord & DPI profili otomatik taranıyor...",
+                          NIIF_INFO);
+        HANDLE ht = CreateThread(NULL, 0, tray_autoprobe_thread, NULL, 0, NULL);
+        if (ht) CloseHandle(ht);
+    } else {
+        tray_show_balloon(L"TurkDPI v2.0 — Arka Planda Aktif",
+                          g_profile_labels_w[g_current_profile_idx],
+                          NIIF_INFO);
+    }
+
+    MSG msg;
+    while (GetMessageW(&msg, NULL, 0, 0) > 0) {
+        TranslateMessage(&msg);
+        DispatchMessageW(&msg);
+    }
+
+    stop_engine_bg();
+    if (h_mutex) CloseHandle(h_mutex);
+    return 0;
 }
 
 #endif /* _WIN32 */
-
-/* ============================================================================
- * 4. Interactive Turkish Console Menu (Zero Batch Script Dependency)
- * ============================================================================ */
-static int run_interactive_console(void) {
-#if defined(_WIN32) && !defined(_SHIM_WINDOWS_H)
-    SetConsoleTitleA("TurkDPI v2.0 - Akilli DPI & Discord Erisim Motoru");
-#endif
-    char line[64];
-
-    for (;;) {
-        printf("\n============================================================================\n");
-        printf("  TurkDPI v" TURKDPI_VERSION " — Yeni Nesil Akilli DPI & Discord Ses/Web Motoru\n");
-        printf("  (Zapret MD5Sig + ByeDPI SNI-MidSplit + Dual-Stack DNS + Discord UDP Ses)\n");
-        printf("============================================================================\n\n");
-        printf("  [A] OTOMATIK ALGILAMA (ISS'niz icin en hizli profili bul ve calistir)\n\n");
-        printf("  --- Gecici Calistir (Pencere Kapaninca Durur) ----------------------------\n");
-        for (int i = 0; i < TURKDPI_NUM_PROFILES; i++) {
-            printf("  [%d] %s\n", i, g_turkdpi_profiles[i].name);
-        }
-        printf("\n  --- Windows Hizmeti (Servis) Yonetimi ------------------------------------\n");
-        printf("  [S] Hizmet Olarak Kur (Otomatik algilar ve her acilista baslatir)\n");
-        printf("  [R] Hizmeti ve WinDivert Surucusunu Tamamen Kaldir (REVERT)\n");
-        printf("  [D] Durum Kontrolu ve Canli Discord Baglanti Testi\n");
-        printf("  [Q] Cikis\n\n");
-        printf("Seciminiz [A/0-6/S/R/D/Q]: ");
-        fflush(stdout);
-
-        if (!fgets(line, sizeof(line), stdin)) return -1;
-        char ch = 0;
-        for (int i = 0; line[i]; i++) {
-            if (!isspace((unsigned char)line[i])) { ch = (char)toupper((unsigned char)line[i]); break; }
-        }
-
-        if (ch == 'Q') {
-            return -1;
-        }
-#if defined(_WIN32) && !defined(_SHIM_WINDOWS_H)
-        if (ch == 'R') {
-            scm_remove_service();
-            continue;
-        }
-        if (ch == 'D') {
-            scm_show_status();
-            continue;
-        }
-        if (ch == 'S') {
-            printf("\n[*] Kurulum icin en uygun ISS profili otomatik tespit ediliyor...\n");
-            g_w_filter = open_divert_handle(TURKDPI_MAIN_FILTER, 0);
-            if (g_w_filter == INVALID_HANDLE_VALUE) continue;
-            HANDLE h_thread = CreateThread(NULL, 0, engine_worker_thread, NULL, 0, NULL);
-            int best = probe_find_best_profile(&g_active_profile);
-            deinit_all();
-            if (h_thread) { WaitForSingleObject(h_thread, 1000); CloseHandle(h_thread); }
-            g_exiting = 0;
-            scm_install_service(best);
-            continue;
-        }
-#endif
-        if (ch == 'A') {
-            return -100; /* Trigger Auto-Probe + Live Run */
-        }
-        if (ch >= '0' && ch <= '6') {
-            return (ch - '0');
-        }
-    }
-}
 
 /* ============================================================================
  * 5. CLI Argument Parser & Entry Point
  * ============================================================================ */
 static struct option long_options[] = {
     {"auto",        no_argument,       0, 'A'},
-    {"interactive", no_argument,       0, 'I'},
-    {"install",     optional_argument, 0, 'S'},
     {"remove",      no_argument,       0, 'R'},
-    {"status",      no_argument,       0, 'D'},
-    {"service",     no_argument,       0, 'W'},
     {"profile",     required_argument, 0, 'P'},
     {"run",         required_argument, 0, 'P'},
     {"split-sni",   no_argument,       0,  1 },
@@ -892,19 +1132,13 @@ int main(int argc, char *argv[]) {
     desync_init_defaults();
     g_custom_profile = g_turkdpi_profiles[0];
 
-    int mode_auto        = 0;
-    int mode_interactive = (argc == 1);
-    int mode_install     = 0;
-    int mode_remove      = 0;
-    int mode_status      = 0;
-    int mode_service     = 0;
-    int selected_profile = -1;
+    int mode_auto         = 0;
+    int mode_remove       = 0;
+    int selected_profile  = -1;
     int legacy_flags_used = 0;
-    int debug_exit       = 0;
+    int debug_exit        = 0;
 
     if (argc > 1) {
-        /* Start with clean custom profile when legacy flags are passed,
-         * but always keep SNI-midpoint split and Discord Voice UDP desync enabled! */
         memset(&g_custom_profile, 0, sizeof(g_custom_profile));
         g_custom_profile.name           = "Ozel CLI Yapilandirmasi (Hybrid Desync)";
         g_custom_profile.isp_hint       = "Ozel Parametreler";
@@ -918,28 +1152,13 @@ int main(int argc, char *argv[]) {
     }
 
     int opt;
-    while ((opt = getopt_long(argc, argv, "123456789pqrsaf:e:mwk:nAISRDWP:d:g:v:b:z:i:", long_options, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "123456789pqrsaf:e:mwk:nARP:d:g:v:b:z:i:", long_options, NULL)) != -1) {
         switch (opt) {
-            case 'A': mode_auto = 1; mode_interactive = 0; break;
-            case 'I': mode_interactive = 1; break;
-            case 'S':
-                mode_install = 1;
-                mode_interactive = 0;
-                if (optarg) {
-                    selected_profile = atoi(optarg);
-                } else if (optind < argc && isdigit((unsigned char)argv[optind][0])) {
-                    selected_profile = atoi(argv[optind++]);
-                } else {
-                    mode_auto = 1; /* Auto-detect best profile before installing service if none specified */
-                }
-                break;
-            case 'R': mode_remove = 1; mode_interactive = 0; break;
-            case 'D': mode_status = 1; mode_interactive = 0; break;
-            case 'W': mode_service = 1; mode_interactive = 0; break;
+            case 'A': mode_auto = 1; break;
+            case 'R': mode_remove = 1; break;
             case 'P':
                 selected_profile = atoi(optarg);
                 if (selected_profile < 0 || selected_profile >= TURKDPI_NUM_PROFILES) selected_profile = 0;
-                mode_interactive = 0;
                 break;
             case 1: g_custom_profile.do_split_sni = 1; break;
             case 2: g_custom_profile.do_fake_packet = 1; g_custom_profile.fooling_flags |= FOOL_MD5SIG; break;
@@ -1103,7 +1322,6 @@ int main(int argc, char *argv[]) {
                 break;
             case '|':
                 debug_exit = 1;
-                mode_interactive = 0;
                 break;
             default:
                 break;
@@ -1111,62 +1329,30 @@ int main(int argc, char *argv[]) {
     }
 
     if (debug_exit) {
-        printf("TurkDPI Debug Exit OK\n");
         return 0;
     }
 
 #if defined(_WIN32) && !defined(_SHIM_WINDOWS_H)
-    if (!mode_service && GetConsoleWindow() != NULL) {
-        ensure_admin_privileges(argc, argv);
-    }
+    ensure_admin_privileges(argc, argv);
     if (mode_remove) {
         return scm_remove_service();
     }
-    if (mode_status) {
-        scm_show_status();
-        return 0;
-    }
-    if (mode_install && !mode_auto) {
-        return scm_install_service(selected_profile >= 0 ? selected_profile : 0);
+    if (!legacy_flags_used) {
+        return run_system_tray_app(selected_profile, mode_auto);
     }
 #else
     (void)mode_auto;
-    (void)mode_install;
     (void)mode_remove;
-    (void)mode_status;
-    (void)mode_service;
+    (void)selected_profile;
 #endif
 
-    if (mode_interactive) {
-        int choice = run_interactive_console();
-        if (choice == -100) {
-            mode_auto = 1;
-        } else if (choice >= 0 && choice < TURKDPI_NUM_PROFILES) {
-            selected_profile = choice;
-        } else {
-            return 0;
-        }
-    }
-
-    if (selected_profile >= 0 && selected_profile < TURKDPI_NUM_PROFILES) {
-        g_active_profile = &g_turkdpi_profiles[selected_profile];
-    } else if (legacy_flags_used) {
+    if (legacy_flags_used) {
         if (g_custom_profile.do_fragment_https && !g_custom_profile.https_frag_size)
             g_custom_profile.https_frag_size = 2;
         if (g_custom_profile.do_fragment_http && !g_custom_profile.http_frag_size)
             g_custom_profile.http_frag_size = 2;
         g_active_profile = &g_custom_profile;
-    } else {
-        g_active_profile = &g_turkdpi_profiles[0];
     }
-
-#if defined(_WIN32) && !defined(_SHIM_WINDOWS_H)
-    if (mode_service || (GetConsoleWindow() == NULL && !mode_auto)) {
-        if (run_as_service()) {
-            return 0;
-        }
-    }
-#endif
 
     g_w_filter = open_divert_handle(TURKDPI_MAIN_FILTER, 0);
     if (g_w_filter == INVALID_HANDLE_VALUE) {
@@ -1175,45 +1361,6 @@ int main(int argc, char *argv[]) {
 
     signal(SIGINT, sigint_handler);
     flush_dns_cache();
-
-#if defined(_WIN32) && !defined(_SHIM_WINDOWS_H)
-    if (mode_auto) {
-        HANDLE h_thread = CreateThread(NULL, 0, engine_worker_thread, NULL, 0, NULL);
-        int best_idx = probe_find_best_profile(&g_active_profile);
-
-        if (mode_install) {
-            deinit_all();
-            if (h_thread) { WaitForSingleObject(h_thread, 1000); CloseHandle(h_thread); }
-            g_exiting = 0;
-            return scm_install_service(best_idx);
-        }
-
-        printf("\n[*] TurkDPI su anda [Profil %d] ile aktif olarak calisiyor!\n", best_idx);
-        printf("    Discord (Web + Sesli Sohbet) ve tum engelli sitelere erisebilirsiniz.\n");
-        printf("    Durdurmak icin bu pencereyi kapatin veya Ctrl+C tuslarina basin.\n\n");
-        if (h_thread) {
-            WaitForSingleObject(h_thread, INFINITE);
-            CloseHandle(h_thread);
-        }
-        return 0;
-    }
-#endif
-
-    printf("\n============================================================================\n");
-    printf("  [+] TurkDPI v" TURKDPI_VERSION " Aktif — Filtre Calisiyor!\n");
-    printf("  [+] Aktif Profil : %s\n", g_active_profile->name);
-    printf("  [+] Hedef ISS    : %s\n", g_active_profile->isp_hint);
-    printf("  [+] Ozellikler   : SNI-MidSplit=%d | Reverse=%d | Fake=%d (0x%02X) | UDP-Ses=%d | DNS=%d\n",
-           g_active_profile->do_split_sni,
-           g_active_profile->do_reverse_frag,
-           g_active_profile->do_fake_packet,
-           g_active_profile->fooling_flags,
-           g_active_profile->do_udp_fake,
-           g_active_profile->do_dnsv4_redirect);
-    printf("============================================================================\n");
-    printf("  Discord (Web & Ses) ve diger uygulamalar icin DPI engeli kaldirildi.\n");
-    printf("  Kapatmak icin Ctrl+C tuslarina basin veya pencereyi kapatin.\n\n");
-
     engine_worker_thread(NULL);
     return 0;
 }
