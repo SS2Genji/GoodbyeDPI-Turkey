@@ -1,48 +1,34 @@
 /*
- * DNS UDP Connection Tracker for GoodbyeDPI
+ * Zero-Allocation DNS UDP Connection Tracker for GoodbyeDPI
  *
- * This is a simple connection tracker for DNS UDP data.
- * It's not a proper one. The caveats as follows:
- *    * Uses only source IP address and port as a hash key;
- *    * One-shot only. Removes conntrack record as soon as gets the reply;
- *    * Does not properly parse DNS request and response, only checks some bytes;
- *
- * But anyway, it works fine for DNS.
+ * Uses a static, cache-line aligned open-addressed hash table with
+ * hardware SSE4.2 CRC32C hashing and zero-syscall GetTickCount64()
+ * timestamps. Eliminates malloc/free and linear table scans from the
+ * packet-processing hot path.
  */
 
 #include <windows.h>
-#include <time.h>
 #include <stdio.h>
+#include <string.h>
 #include "goodbyedpi.h"
 #include "dnsredir.h"
-#include "utils/uthash.h"
 
-// Key format: '4'/'6' (IPv4/IPv6) + srcip[16] + srcport[2]
-#define UDP_CONNRECORD_KEY_LEN 19
+#define DNS_CLEANUP_INTERVAL_MS 30000ULL
+#define DNS_TABLE_BITS          12u
+#define DNS_TABLE_SIZE          (1u << DNS_TABLE_BITS)
+#define DNS_TABLE_MASK          (DNS_TABLE_SIZE - 1u)
+#define DNS_PROBE_WINDOW        8u
 
-// Clean up old DNS connection records every 30 seconds
-#define DNS_CLEANUP_INTERVAL_SEC 30
+typedef struct {
+    uint64_t tick_ms;      /* 0 = empty slot; otherwise monotonic ms (| 1ULL) */
+    uint32_t srcip[4];
+    uint32_t dstip[4];
+    uint16_t srcport;
+    uint16_t dstport;
+    uint8_t  is_ipv6;
+} dns_connrecord_t;
 
-/* HACK!
- * uthash uses strlen() for HASH_FIND_STR.
- * We have null bytes in our key, so we can't use strlen()
- * And since it's always UDP_CONNRECORD_KEY_LEN bytes long,
- * we don't need to use any string function to determine length.
- */
-#undef uthash_strlen
-#define uthash_strlen(s) UDP_CONNRECORD_KEY_LEN
-
-// DNS connection tracking record structure
-typedef struct udp_connrecord {
-    char key[UDP_CONNRECORD_KEY_LEN]; // Lookup key
-    time_t time;         // Time when record was added
-    uint32_t dstip[4];   // Destination IP (can be IPv4 or IPv6)
-    uint16_t dstport;    // Destination port
-    UT_hash_handle hh;   // Makes this structure hashable with uthash
-} udp_connrecord_t;
-
-static time_t last_cleanup = 0;
-static udp_connrecord_t *conntrack = NULL;
+static dns_connrecord_t conntrack_table[DNS_TABLE_SIZE] __attribute__((aligned(64)));
 
 /**
  * Flush DNS resolver cache in Windows
@@ -64,149 +50,23 @@ void flush_dns_cache() {
     FreeLibrary(dnsapi);
 }
 
-/**
- * Fill key data structure with connection information
- */
-inline static void fill_key_data(char *key, const uint8_t is_ipv6, const uint32_t srcip[4],
-                          const uint16_t srcport)
-{
-    if (is_ipv6) {
-        *(uint8_t*)(key) = '6';
-        ipv6_copy_addr((uint32_t*)(key + sizeof(uint8_t)), srcip);
+static inline uint32_t hash_dns_key(const uint32_t *srcip, uint16_t srcport, uint8_t is_ipv6) {
+    uint64_t k0 = ((uint64_t)is_ipv6 << 48) | ((uint64_t)srcport << 32) | (uint64_t)srcip[0];
+    uint32_t h = fast_hash_u64(0x9E3779B97F4A7C15ULL, k0);
+    if (UNLIKELY(is_ipv6)) {
+        uint64_t k1 = ((uint64_t)srcip[1] << 32) | (uint64_t)srcip[2];
+        h = fast_hash_u64(h, k1 ^ (uint64_t)srcip[3]);
     }
-    else {
-        *(uint8_t*)(key) = '4';
-        ipv4_copy_addr((uint32_t*)(key + sizeof(uint8_t)), srcip);
-    }
-
-    *(uint16_t*)(key + sizeof(uint8_t) + sizeof(uint32_t) * 4) = srcport;
+    return h;
 }
 
-/**
- * Extract connection information from key data
- */
-inline static void fill_data_from_key(uint8_t *is_ipv6, uint32_t srcip[4], uint16_t *srcport,
-                                      const char *key)
-{
-    if (key[0] == '6') {
-        *is_ipv6 = 1;
-        ipv6_copy_addr(srcip, (uint32_t*)(key + sizeof(uint8_t)));
-    }
-    else {
-        *is_ipv6 = 0;
-        ipv4_copy_addr(srcip, (uint32_t*)(key + sizeof(uint8_t)));
-    }
-    *srcport = *(uint16_t*)(key + sizeof(uint8_t) + sizeof(uint32_t) * 4);
-}
-
-/**
- * Construct a connection tracking key from connection parameters
- */
-inline static void construct_key(const uint32_t srcip[4], const uint16_t srcport,
-                                 char *key, const uint8_t is_ipv6)
-{
-    debug("Construct key enter\n");
-    if (key) {
-        debug("Constructing key\n");
-        fill_key_data(key, is_ipv6, srcip, srcport);
-    }
-    debug("Construct key end\n");
-}
-
-/**
- * Extract connection info from key and record for use in the application
- */
-inline static void deconstruct_key(const char *key, const udp_connrecord_t *connrecord,
-                                   conntrack_info_t *conn_info)
-{
-    debug("Deconstruct key enter\n");
-    if (key && conn_info) {
-        debug("Deconstructing key\n");
-        fill_data_from_key(&conn_info->is_ipv6, conn_info->srcip,
-                           &conn_info->srcport, key);
-
-        if (conn_info->is_ipv6)
-            ipv6_copy_addr(conn_info->dstip, connrecord->dstip);
-        else
-            ipv4_copy_addr(conn_info->dstip, connrecord->dstip);
-
-        conn_info->dstport = connrecord->dstport;
-    }
-    debug("Deconstruct key end\n");
-}
-
-/**
- * Check if a connection exists in the tracking table
- */
-static int check_get_udp_conntrack_key(const char *key, udp_connrecord_t **connrecord) {
-    udp_connrecord_t *tmp_connrecord = NULL;
-    if (!conntrack) return FALSE;
-
-    HASH_FIND_STR(conntrack, key, tmp_connrecord);
-    if (tmp_connrecord) {
-        if (connrecord)
-            *connrecord = tmp_connrecord;
-        debug("check_get_udp_conntrack_key found key\n");
-        return TRUE;
-    }
-    debug("check_get_udp_conntrack_key key not found\n");
-    return FALSE;
-}
-
-/**
- * Add a new DNS connection to the tracking table
- */
-static int add_udp_conntrack(const uint32_t srcip[4], const uint16_t srcport,
-                             const uint32_t dstip[4], const uint16_t dstport,
-                             const uint8_t is_ipv6
-                            )
-{
-    if (!(srcip && srcport && dstip && dstport))
-        return FALSE;
-
-    udp_connrecord_t *tmp_connrecord = malloc(sizeof(udp_connrecord_t));
-    construct_key(srcip, srcport, tmp_connrecord->key, is_ipv6);
-
-    if (!check_get_udp_conntrack_key(tmp_connrecord->key, NULL)) {
-        tmp_connrecord->time = time(NULL);
-
-        if (is_ipv6) {
-            ipv6_copy_addr(tmp_connrecord->dstip, dstip);
-        }
-        else {
-            ipv4_copy_addr(tmp_connrecord->dstip, dstip);
-        }
-        tmp_connrecord->dstport = dstport;
-        HASH_ADD_STR(conntrack, key, tmp_connrecord);
-        debug("Added UDP conntrack\n");
-        return TRUE;
-    }
-    debug("Not added UDP conntrack\n");
-    free(tmp_connrecord);
-    return FALSE;
-}
-
-/**
- * Periodically clean up old DNS connection records
- */
-static void dns_cleanup() {
-    udp_connrecord_t *tmp_connrecord, *tmp_connrecord2 = NULL;
-
-    if (last_cleanup == 0) {
-        last_cleanup = time(NULL);
-        return;
-    }
-
-    if (difftime(time(NULL), last_cleanup) >= DNS_CLEANUP_INTERVAL_SEC) {
-        last_cleanup = time(NULL);
-
-        HASH_ITER(hh, conntrack, tmp_connrecord, tmp_connrecord2) {
-            if (difftime(last_cleanup, tmp_connrecord->time) >= DNS_CLEANUP_INTERVAL_SEC) {
-                HASH_DEL(conntrack, tmp_connrecord);
-                free(tmp_connrecord);
-            }
-        }
-    }
+static inline int match_dns_key(const dns_connrecord_t *rec, const uint32_t *srcip,
+                                uint16_t srcport, uint8_t is_ipv6) {
+    if (rec->srcport != srcport || rec->is_ipv6 != is_ipv6)
+        return 0;
+    if (!is_ipv6)
+        return rec->srcip[0] == srcip[0];
+    return memcmp(rec->srcip, srcip, sizeof(uint32_t) * 4) == 0;
 }
 
 /**
@@ -215,12 +75,15 @@ static void dns_cleanup() {
 int dns_is_dns_packet(const char *packet_data, const UINT packet_dataLen, const int outgoing) {
     if (packet_dataLen < 16) return FALSE;
 
-    if (outgoing && (ntohs(*(const uint16_t*)(packet_data + 2)) & 0xFA00) == 0 &&
-        (ntohs(*(const uint32_t*)(packet_data + 6))) == 0) {
+    const uint8_t *p = (const uint8_t *)packet_data;
+    uint16_t flags = ((uint16_t)p[2] << 8) | p[3];
+    uint16_t ancount = ((uint16_t)p[6] << 8) | p[7];
+    uint16_t nscount = ((uint16_t)p[8] << 8) | p[9];
+
+    if (outgoing && (flags & 0xFA00u) == 0 && ancount == 0 && nscount == 0) {
         return TRUE;
     }
-    else if (!outgoing &&
-        (ntohs(*(const uint16_t*)(packet_data + 2)) & 0xF800) == 0x8000) {
+    else if (!outgoing && (flags & 0xF800u) == 0x8000u) {
         return TRUE;
     }
     return FALSE;
@@ -228,54 +91,90 @@ int dns_is_dns_packet(const char *packet_data, const UINT packet_dataLen, const 
 
 /**
  * Handle outgoing DNS requests
- * Tracks them for later correlation with responses
+ * Tracks them for later correlation with responses without heap allocation
  */
-int dns_handle_outgoing(const uint32_t srcip[4], const uint16_t srcport,
-                        const uint32_t dstip[4], const uint16_t dstport,
+int dns_handle_outgoing(const uint32_t *srcip, const uint16_t srcport,
+                        const uint32_t *dstip, const uint16_t dstport,
                         const char *packet_data, const UINT packet_dataLen,
                         const uint8_t is_ipv6)
 {
-    if (packet_dataLen < 16)
+    if (UNLIKELY(!(srcip && srcport && dstip && dstport) || packet_dataLen < 16))
         return FALSE;
 
-    dns_cleanup();
+    if (!dns_is_dns_packet(packet_data, packet_dataLen, 1))
+        return FALSE;
 
-    if (dns_is_dns_packet(packet_data, packet_dataLen, 1)) {
-        /* Looks like DNS request */
-        debug("trying to add srcport = %hu, dstport = %hu\n", ntohs(srcport), ntohs(dstport));
-        return add_udp_conntrack(srcip, srcport, dstip, dstport, is_ipv6);
+    uint64_t now = (uint64_t)GetTickCount64() | 1ULL;
+    uint32_t base = hash_dns_key(srcip, srcport, is_ipv6);
+    dns_connrecord_t *target = NULL;
+
+    for (uint32_t i = 0; i < DNS_PROBE_WINDOW; i++) {
+        dns_connrecord_t *slot = &conntrack_table[(base + i) & DNS_TABLE_MASK];
+        if (slot->tick_ms == 0 || (now - slot->tick_ms) >= DNS_CLEANUP_INTERVAL_MS) {
+            if (!target) target = slot;
+            if (slot->tick_ms == 0) break;
+        } else if (match_dns_key(slot, srcip, srcport, is_ipv6)) {
+            return FALSE;
+        }
     }
-    debug("____dns_handle_outgoing FALSE: srcport = %hu, dstport = %hu\n", ntohs(srcport), ntohs(dstport));
-    return FALSE;
+
+    if (!target) {
+        target = &conntrack_table[base & DNS_TABLE_MASK];
+    }
+
+    target->tick_ms = now;
+    target->srcport = srcport;
+    target->dstport = dstport;
+    target->is_ipv6 = is_ipv6;
+    if (is_ipv6) {
+        ipv6_copy_addr(target->srcip, srcip);
+        ipv6_copy_addr(target->dstip, dstip);
+    } else {
+        ipv4_copy_addr(target->srcip, srcip);
+        ipv4_copy_addr(target->dstip, dstip);
+    }
+    return TRUE;
 }
 
 /**
  * Handle incoming DNS responses
  * Correlates them with tracked requests and provides redirection info
  */
-int dns_handle_incoming(const uint32_t srcip[4], const uint16_t srcport,
+int dns_handle_incoming(const uint32_t *srcip, const uint16_t srcport,
                         const char *packet_data, const UINT packet_dataLen,
                         conntrack_info_t *conn_info, const uint8_t is_ipv6)
 {
-    char key[UDP_CONNRECORD_KEY_LEN];
-    udp_connrecord_t *tmp_connrecord = NULL;
-
-    if (packet_dataLen < 16 || !conn_info)
+    if (UNLIKELY(packet_dataLen < 16 || !conn_info || !srcip))
         return FALSE;
 
-    dns_cleanup();
+    if (!dns_is_dns_packet(packet_data, packet_dataLen, 0))
+        return FALSE;
 
-    if (dns_is_dns_packet(packet_data, packet_dataLen, 0)) {
-        /* Looks like DNS response */
-        construct_key(srcip, srcport, key, is_ipv6);
-        if (check_get_udp_conntrack_key(key, &tmp_connrecord) && tmp_connrecord) {
-            /* Connection exists in conntrack, moving on */
-            deconstruct_key(key, tmp_connrecord, conn_info);
-            HASH_DEL(conntrack, tmp_connrecord);
-            free(tmp_connrecord);
+    uint64_t now = (uint64_t)GetTickCount64() | 1ULL;
+    uint32_t base = hash_dns_key(srcip, srcport, is_ipv6);
+
+    for (uint32_t i = 0; i < DNS_PROBE_WINDOW; i++) {
+        dns_connrecord_t *slot = &conntrack_table[(base + i) & DNS_TABLE_MASK];
+        if (slot->tick_ms == 0)
+            continue;
+        if ((now - slot->tick_ms) >= DNS_CLEANUP_INTERVAL_MS) {
+            slot->tick_ms = 0;
+            continue;
+        }
+        if (match_dns_key(slot, srcip, srcport, is_ipv6)) {
+            conn_info->is_ipv6 = slot->is_ipv6;
+            conn_info->srcport = slot->srcport;
+            conn_info->dstport = slot->dstport;
+            if (is_ipv6) {
+                ipv6_copy_addr(conn_info->srcip, slot->srcip);
+                ipv6_copy_addr(conn_info->dstip, slot->dstip);
+            } else {
+                ipv4_copy_addr(conn_info->srcip, slot->srcip);
+                ipv4_copy_addr(conn_info->dstip, slot->dstip);
+            }
+            slot->tick_ms = 0; /* One-shot eviction */
             return TRUE;
         }
     }
-    debug("____dns_handle_incoming FALSE: srcport = %hu\n", ntohs(srcport));
     return FALSE;
 }

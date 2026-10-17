@@ -36,7 +36,29 @@ else
 	LDFLAGS += -Wl,--pic-executable,-e,_mainCRTStartup -m32
 endif
 
-.PHONY: default all clean
+ifdef OPTIMIZE
+ifdef BIT64
+	CFLAGS += -O3 -flto -march=x86-64-v2 -fno-plt
+else
+	CFLAGS += -O3 -flto -msse4.2
+endif
+	LDFLAGS += -O3 -flto
+endif
+
+HOSTCC ?= gcc
+HOST_CFLAGS = -std=gnu99 -I. -I../tests/shim -Wall -Wextra -Werror
+ifdef OPTIMIZE
+	HOST_CFLAGS += -O3 -flto -march=x86-64-v2 -fno-plt
+else
+	HOST_CFLAGS += -O2 -g
+endif
+ifdef SANITIZE
+	HOST_CFLAGS += -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer
+endif
+
+HOST_SRCS = dnsredir.c ttltrack.c blackwhitelist.c fakepackets.c service.c utils/getline.c utils/repl_str.c
+
+.PHONY: default all clean test
 
 default: $(TARGET)
 all: default
@@ -55,6 +77,10 @@ goodbyedpi-rc.o:
 $(TARGET): $(OBJECTS)
 	$(CC) $(OBJECTS) $(LDFLAGS) $(LIBS) -s -o $@
 
+test:
+	$(HOSTCC) $(HOST_CFLAGS) ../tests/bench_hotpath.c $(HOST_SRCS) -lm -o /tmp/goodbyedpi_bench_hotpath
+	/tmp/goodbyedpi_bench_hotpath
+
 clean:
-	-rm -f *.o utils/*.o
+	-rm -f *.o utils/*.o /tmp/goodbyedpi_bench_hotpath
 	-rm -f $(TARGET)

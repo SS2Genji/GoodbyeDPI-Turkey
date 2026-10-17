@@ -1,5 +1,8 @@
 *.o
-*.exe
+src/*.exe
+!windows/x86_64/goodbyedpi.exe
+!windows/x86/goodbyedpi.exe
+tasks/
 
 # macOS build outputs
 macos/bin/

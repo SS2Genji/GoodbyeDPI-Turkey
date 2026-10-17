@@ -14,12 +14,12 @@ typedef struct tcp_conntrack_info {
 } tcp_conntrack_info_t;
 
 // Process incoming TCP SYN/ACK packets to extract TTL values
-int tcp_handle_incoming(uint32_t srcip[4], uint32_t dstip[4],
+int tcp_handle_incoming(const uint32_t *srcip, const uint32_t *dstip,
                         uint16_t srcport, uint16_t dstport,
                         uint8_t is_ipv6, uint8_t ttl);
 
 // Process outgoing TCP packets and match with stored connections
-int tcp_handle_outgoing(uint32_t srcip[4], uint32_t dstip[4],
+int tcp_handle_outgoing(const uint32_t *srcip, const uint32_t *dstip,
                         uint16_t srcport, uint16_t dstport,
                         tcp_conntrack_info_t *conn_info,
                         uint8_t is_ipv6);

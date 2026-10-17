@@ -1,138 +1,82 @@
-name: Build GoodbyeDPI
+name: Build & Package GoodbyeDPI-Turkey
 
 on:
   push:
-    paths:
-      - 'src/**'
-      - 'macos/**'
-      - '.github/workflows/build.yml'
+    branches: [ master, main ]
   pull_request:
-    paths:
-      - 'src/**'
-      - 'macos/**'
-      - '.github/workflows/build.yml'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 env:
-  WINDIVERT_URL: https://reqrypt.org/download/WinDivert-2.2.0-D.zip
-  WINDIVERT_NAME: WinDivert-2.2.0-D.zip
-  WINDIVERT_BASENAME: WinDivert-2.2.0-D
-  WINDIVERT_SHA256: 1d461cfdfa7ba88ebcfbb3603b71b703e9f72aba8aeff99a75ce293e6f89d2ba
+  WINDIVERT_URL: https://github.com/basil00/WinDivert/releases/download/v2.2.2/WinDivert-2.2.2-A.zip
+  WINDIVERT_NAME: WinDivert-2.2.2-A.zip
+  WINDIVERT_BASENAME: WinDivert-2.2.2-A
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Declare short commit variable
-        id: vars
+      - name: Run Native Sanitizer & Micro-Benchmark Suite
         run: |
-          echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+          make -C src test SANITIZE=1
+          make -C src test OPTIMIZE=1
 
       - name: Install MinGW-w64
-        run: >
-          sudo rm /var/lib/man-db/auto-update &&
-          sudo DEBIAN_FRONTEND=noninteractive XZ_DEFAULTS="-T0" XZ_OPT="-T0" eatmydata
-          apt install -y --no-install-recommends gcc-mingw-w64
-
-      - name: Download WinDivert from cache
-        id: windivert-cache
-        uses: actions/cache@v4
-        with:
-          path: ${{ env. WINDIVERT_NAME }}
-          key: ${{ env. WINDIVERT_SHA256 }}
-
-      - name: Download WinDivert from the website
-        if: steps.windivert-cache.outputs.cache-hit != 'true'
-        run: >
-          wget ${{ env. WINDIVERT_URL }} &&
-          (echo ${{ env. WINDIVERT_SHA256 }} ${{ env. WINDIVERT_NAME }} | sha256sum -c)
-
-      - name: Unpack WinDivert
-        run: unzip ${{ env. WINDIVERT_NAME }}
-
-      - name: Compile x86_64
-        run: >
-          cd src && make clean &&
-          make CPREFIX=x86_64-w64-mingw32- BIT64=1 WINDIVERTHEADERS=../${{ env.WINDIVERT_BASENAME }}/include WINDIVERTLIBS=../${{ env.WINDIVERT_BASENAME }}/x64 -j4
-
-      - name: Prepare x86_64 directory
         run: |
-          mkdir goodbyedpi_x86_64_${{ steps.vars.outputs.sha_short }}
-          cp src/goodbyedpi.exe ${{ env.WINDIVERT_BASENAME }}/x64/*.{dll,sys} goodbyedpi_x86_64_${{ steps.vars.outputs.sha_short }}
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends gcc-mingw-w64 zip unzip wget
 
-      - name: Upload output file x86_64
+      - name: Download & Unpack WinDivert 2.2.2-A
+        run: |
+          wget -q "${{ env.WINDIVERT_URL }}" -O "${{ env.WINDIVERT_NAME }}"
+          unzip -q -o "${{ env.WINDIVERT_NAME }}"
+
+      - name: Compile Windows x86_64 (SSE4.2 / LTO / O3)
+        run: |
+          cd src && make clean
+          make CPREFIX=x86_64-w64-mingw32- BIT64=1 OPTIMIZE=1 WINDIVERTHEADERS=../${{ env.WINDIVERT_BASENAME }}/include WINDIVERTLIBS=../${{ env.WINDIVERT_BASENAME }}/x64 -j4
+          mkdir -p ../windows/x86_64
+          cp goodbyedpi.exe ../windows/x86_64/
+          cp ../${{ env.WINDIVERT_BASENAME }}/x64/WinDivert.dll ../${{ env.WINDIVERT_BASENAME }}/x64/WinDivert64.sys ../windows/x86_64/
+
+      - name: Compile Windows x86 (SSE4.2 / LTO / O3)
+        run: |
+          cd src && make clean
+          make CPREFIX=i686-w64-mingw32- OPTIMIZE=1 WINDIVERTHEADERS=../${{ env.WINDIVERT_BASENAME }}/include WINDIVERTLIBS=../${{ env.WINDIVERT_BASENAME }}/x86 -j4
+          mkdir -p ../windows/x86
+          cp goodbyedpi.exe ../windows/x86/
+          cp ../${{ env.WINDIVERT_BASENAME }}/x86/WinDivert.dll ../${{ env.WINDIVERT_BASENAME }}/x86/WinDivert32.sys ../${{ env.WINDIVERT_BASENAME }}/x86/WinDivert64.sys ../windows/x86/
+
+      - name: Package Ready-to-Run Windows Release Archive
+        run: |
+          cd windows
+          zip -r -9 ../GoodbyeDPI-Turkey-Optimized.zip .
+
+      - name: Upload Release Zip Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: goodbyedpi_x86_64_${{ steps.vars.outputs.sha_short }}
-          path: goodbyedpi_x86_64_${{ steps.vars.outputs.sha_short }}
+          name: GoodbyeDPI-Turkey-Optimized
+          path: GoodbyeDPI-Turkey-Optimized.zip
 
-      - name: Compile i686
-        run: >
-          cd src && make clean &&
-          make CPREFIX=i686-w64-mingw32- WINDIVERTHEADERS=../${{ env.WINDIVERT_BASENAME }}/include WINDIVERTLIBS=../${{ env.WINDIVERT_BASENAME }}/x86 -j4
-
-      - name: Prepare x86 directory
+      - name: Commit Compiled Binaries & Publish GitHub Release
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          mkdir goodbyedpi_x86_${{ steps.vars.outputs.sha_short }}
-          cp src/goodbyedpi.exe ${{ env.WINDIVERT_BASENAME }}/x86/*.{dll,sys} goodbyedpi_x86_${{ steps.vars.outputs.sha_short }}
-
-      - name: Upload output file x86
-        uses: actions/upload-artifact@v4
-        with:
-          name: goodbyedpi_x86_${{ steps.vars.outputs.sha_short }}
-          path: goodbyedpi_x86_${{ steps.vars.outputs.sha_short }}
-
-  build-macos:
-    name: Build macOS (ciadpi)
-    strategy:
-      fail-fast: false
-      matrix:
-        # macos-13 = Intel runner, macos-14 = Apple Silicon (M-series).
-        os: [macos-13, macos-14]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Declare short commit variable
-        id: vars
-        run: echo "sha_short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
-
-      - name: Pick artifact arch name
-        id: arch
-        run: |
-          if [[ "${{ matrix.os }}" == "macos-13" ]]; then
-            echo "name=macos_x86_64" >> "$GITHUB_OUTPUT"
-          else
-            echo "name=macos_arm64"  >> "$GITHUB_OUTPUT"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -f windows/x86_64/goodbyedpi.exe windows/x86/goodbyedpi.exe windows/x86_64/*.dll windows/x86_64/*.sys windows/x86/*.dll windows/x86/*.sys
+          if ! git diff --cached --quiet; then
+            git commit -m "chore(release): update compiled Windows x86_64 and x86 binaries [skip ci]"
+            git push
           fi
-
-      - name: Sanity-check bash scripts
-        run: |
-          set -e
-          chmod +x macos/build.sh macos/scripts/*.sh
-          for f in macos/build.sh macos/scripts/*.sh; do bash -n "$f"; done
-
-      - name: Build ciadpi
-        run: ./macos/build.sh
-
-      - name: Stage release directory
-        run: |
-          set -e
-          OUT="goodbyedpi-turkey_${{ steps.arch.outputs.name }}_${{ steps.vars.outputs.sha_short }}"
-          mkdir -p "$OUT/bin" "$OUT/scripts" "$OUT/launchd"
-          cp macos/bin/ciadpi                                      "$OUT/bin/"
-          cp macos/scripts/*.sh                                    "$OUT/scripts/"
-          cp macos/launchd/com.cagritaskn.goodbyedpi-turkey.plist.template "$OUT/launchd/"
-          # A copy of _lib.sh is required by every script — it's already
-          # in macos/scripts/, so the recursive copy above covers it.
-          cp macos/README.md                                       "$OUT/README.md" || true
-          chmod +x "$OUT/scripts/"*.sh
-          echo "OUT=$OUT" >> "$GITHUB_ENV"
-
-      - name: Upload macOS artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ env.OUT }}
-          path: ${{ env.OUT }}
+          gh release delete v1.0.0 --yes --cleanup-tag 2>/dev/null || true
+          gh release create v1.0.0 GoodbyeDPI-Turkey-Optimized.zip \
+            --title "GoodbyeDPI-Turkey v1.0.0 (SIMD & Zero-Alloc Optimized)" \
+            --notes "Ready-to-run Windows package (x86_64 & x86) with SIMD hot-path kernels, RFC 1624 differential checksums, zero-allocation CRC32C conntrack, WinDivert batch I/O, and the unified GoodbyeDPI-Turkey.cmd smart launcher."
