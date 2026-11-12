@@ -52,7 +52,7 @@ Sağ alt köşedeki uygulama simgesine sağ tıkladığınızda (veya sol tıkla
 
 - **Otomatik İSS Algıla (En Hızlı Profili Bul):** 7 farklı Türkiye İSS profilini gerçek TLS 1.3 bağlantısıyla arka planda test eder ve en düşük gecikmeli çalışan profili otomatik seçer.
 - **Discord & TLS 1.3 Bağlantısını Test Et:** `discord.com` ile canlı TLS 1.3 el sıkışması yaparak bağlantı süresini milisaniye (`ms`) cinsinden ölçer ve bildirim olarak gösterir.
-- **Profil Seçimi (`[0]` – `[6]`):** Uygulamayı kapatıp açmaya gerek kalmadan Türk Telekom, TurkNet, Kablonet ve Superonline alternatif profilleri arasında anında geçiş yapar ve DNS önbelleğini temizler.
+- **Profil Seçimi (`[0]` – `[7]`):** Uygulamayı kapatıp açmaya gerek kalmadan Türk Telekom, TurkNet, Kablonet ve Superonline alternatif profilleri arasında anında geçiş yapar ve DNS önbelleğini temizler.
 - **DPI Filtresini Duraklat / Başlat:** Uygulamadan çıkmadan paket filtrelemeyi geçici olarak duraklatır veya yeniden başlatır.
 - **Windows Açılışında Otomatik Başlat:** Eski `service_install.cmd` dosyalarına gerek kalmadan, bilgisayar her açıldığında uygulamanın sağ alt tepside otomatik olarak başlamasını sağlar.
 - **Sürücü ve Ayarları Sıfırla (Tamamen Kaldır):** Çalışan filtreyi durdurur, `WinDivert` çekirdek sürücüsünü kaldırır, otomatik başlatma görevini ve `turkdpi.cfg` ayar dosyasını silip DNS önbelleğini temizler.
@@ -81,6 +81,14 @@ Superonline Fiber veya katı DPI uygulayan diğer servis sağlayıcılarda stand
 
 > [!NOTE]
 > DNS yönlendirmesi içermeyen **Profil 1, 2 veya 6**'yı manuel olarak seçerseniz, Windows ağ ayarlarınızdan DNS adresinizi **Yandex DNS (`77.88.8.8` / `77.88.8.1`)** veya **Cloudflare DNS (`1.1.1.1` / `1.0.0.1`)** olarak ayarlamanız gerekir. **Profil 0, 3, 4 ve 5** ise DNS trafiğini otomatik olarak port `1253` üzerinden Yandex DNS'e yönlendirir.
+
+### Türk Telekom Alternatif — League / Vanguard uyumluluğu [7]
+
+Sistem tepsisi menüsünden **[7] Türk Telekom Alternatif (1 Bayt TLS + Sabit TTL 3)** profilini elle seçebilirsiniz. Bu profil TLS ClientHello paketini ilk bayttan böler ve yalnızca TTL değeri 3 olan bir sahte TCP paketi kullanır. DNS yönlendirmesi, QUIC engellemesi, TCP MD5/yanlış sıra numarası/yanlış checksum yöntemleri ve ses için UDP sahte paketleri bu profilde kapalıdır.
+
+Profil yalnızca League alan adlarıyla sınırlı değildir; genel bağlantılara uygulanır. Ağınıza ve İSS yoluna göre sonuç değişebilir. Sabit düşük TTL değeri her bağlantıda uygun olmayabilir. League/Vanguard kontrolü yapmayan otomatik Discord/İSS taramasına bu nedenle dahil edilmez; diğer profillerin otomatik seçimi değişmez.
+
+> İlk kullanımda League/Vanguard girişini, Discord masaüstü güncelleyicisini ve sesli sohbeti kendi bağlantınızda ayrı ayrı kontrol edin. Her ağda veya engellenen her hizmette çalışma garantisi yoktur.
 
 ## Sık Karşılaşılan Sorunlar
 
