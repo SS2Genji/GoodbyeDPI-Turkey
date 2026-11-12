@@ -601,7 +601,8 @@ static const wchar_t *g_profile_labels_w[TURKDPI_NUM_PROFILES] = {
     L"[3] Superonline Alternatif 2 (Sabit TTL 4 + BadSeq)",
     L"[4] Superonline Alternatif 3 (Klasik TTL 3)",
     L"[5] ByeDPI Saf SNI-Disorder (Oyun Modu - Sahte Paketsiz)",
-    L"[6] Cloudflare DNS (1.1.1.1) + Hibrit (Yurt / Kampüs)"
+    L"[6] Cloudflare DNS (1.1.1.1) + Hibrit (Yurt / Kampüs)",
+    L"[7] Türk Telekom Alternatif (1 Bayt TLS + Sabit TTL 3)"
 };
 
 static int is_process_elevated(void) {

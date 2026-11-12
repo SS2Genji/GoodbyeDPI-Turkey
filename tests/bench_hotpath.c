@@ -132,6 +132,72 @@ static size_t build_sample_tls_clienthello(unsigned char *out, const char *sni, 
     return pos;
 }
 
+
+/* Exercise the actual native decoy and split primitives used by manual profile 7. */
+static void test_league_compatibility_profile(void) {
+    const dpi_profile_t *profile = &g_turkdpi_profiles[TURKDPI_PROFILE_LEAGUE];
+    assert(profile->do_fragment_https && profile->do_native_frag);
+    assert(profile->https_frag_size == 1);
+    assert(profile->do_fake_packet && profile->fooling_flags == FOOL_TTL);
+    assert(profile->fake_ttl == 3);
+    assert(!profile->do_reverse_frag && !profile->do_split_sni);
+    assert(!profile->do_fragment_http && !profile->do_dnsv4_redirect);
+    assert(!profile->do_dnsv6_redirect && !profile->do_udp_fake);
+    assert(!profile->do_block_quic);
+
+    unsigned char packet[1600];
+    unsigned char clienthello[1200];
+    size_t hello_len = build_sample_tls_clienthello(clienthello, "eu2.vg.ac.pvp.net", 0);
+    memset(packet, 0, 40);
+    PWINDIVERT_IPHDR ip = (PWINDIVERT_IPHDR)packet;
+    PWINDIVERT_TCPHDR tcp = (PWINDIVERT_TCPHDR)(packet + 20);
+    ip->Version = 4; ip->HdrLength = 5; ip->TTL = 64; ip->Protocol = IPPROTO_TCP;
+    ip->Length = htons((uint16_t)(40 + hello_len));
+    tcp->SrcPort = htons(54321); tcp->DstPort = htons(443);
+    tcp->SeqNum = htonl(100000); tcp->AckNum = htonl(200000);
+    tcp->HdrLength = 5; tcp->Ack = 1; tcp->Psh = 1;
+    memcpy(packet + 40, clienthello, hello_len);
+    WINDIVERT_ADDRESS addr = {0}; addr.Outbound = 1;
+    WinDivertHelperCalcChecksums(packet, (UINT)(40 + hello_len), &addr, 0);
+
+    /* Both common record versions remain recognizable, including updater-style 03 03. */
+    sni_info_t sni = {0};
+    assert(extract_sni_info((const char *)packet + 40, (UINT)hello_len, &sni));
+    packet[42] = 0x03;
+    assert(extract_sni_info((const char *)packet + 40, (UINT)hello_len, &sni));
+    assert(sni.host_len == strlen("eu2.vg.ac.pvp.net"));
+
+    shim_captured_count = 0;
+    assert(desync_send_fake_tcp((HANDLE)1, &addr, (const char *)packet,
+                               (UINT)(40 + hello_len), 0, profile->fake_ttl,
+                               profile->fooling_flags, 1) == 0);
+    assert(shim_captured_count == 1);
+    PWINDIVERT_IPHDR fake_ip = (PWINDIVERT_IPHDR)shim_captured_pkts[0].data;
+    PWINDIVERT_TCPHDR fake_tcp = (PWINDIVERT_TCPHDR)(shim_captured_pkts[0].data + 20);
+    assert(fake_ip->TTL == 3);
+    assert(fake_tcp->HdrLength == tcp->HdrLength);
+    assert(fake_tcp->SeqNum == tcp->SeqNum && fake_tcp->AckNum == tcp->AckNum);
+
+    shim_captured_count = 0;
+    assert(desync_send_tcp_split((HANDLE)1, &addr, (const char *)packet,
+                                (UINT)(40 + hello_len), packet + 40, (UINT)hello_len,
+                                1, 0, ip, NULL, tcp, profile->https_frag_size,
+                                0, profile->do_reverse_frag) == 0);
+    assert(shim_captured_count == 2);
+    assert(shim_captured_pkts[0].len == 41);
+    assert(shim_captured_pkts[1].len == 40 + hello_len - 1);
+    PWINDIVERT_TCPHDR first = (PWINDIVERT_TCPHDR)(shim_captured_pkts[0].data + 20);
+    PWINDIVERT_TCPHDR second = (PWINDIVERT_TCPHDR)(shim_captured_pkts[1].data + 20);
+    assert(first->SeqNum == tcp->SeqNum);
+    assert(ntohl(second->SeqNum) == ntohl(tcp->SeqNum) + 1);
+    assert(((PWINDIVERT_IPHDR)shim_captured_pkts[0].data)->TTL == 64);
+    assert(((PWINDIVERT_IPHDR)shim_captured_pkts[1].data)->TTL == 64);
+    assert(shim_captured_pkts[0].data[40] == packet[40]);
+    assert(memcmp(shim_captured_pkts[1].data + 40, packet + 41, hello_len - 1) == 0);
+    shim_captured_count = 0;
+    puts("[PASS] Manual League/Vanguard profile packet regression checks");
+}
+
 int main(int argc, char *argv[]) {
     (void)argc; (void)argv;
     printf("=== TurkDPI v2.0 Native Test & Micro-Benchmark Suite ===\n\n");
@@ -145,6 +211,7 @@ int main(int argc, char *argv[]) {
     assert(desync_load_fake_hex("16030100") < 0);
     desync_cleanup();
     desync_init_defaults();
+    test_league_compatibility_profile();
 
     /* 1. Test & Benchmark HTTP header search (fast_memmem) */
     unsigned char http_pkt[1600];

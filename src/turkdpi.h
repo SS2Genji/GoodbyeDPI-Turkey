@@ -275,7 +275,8 @@ bool blackwhitelist_load_list(const char *filename);
 bool blackwhitelist_check_hostname(const char *host_addr, size_t host_len);
 
 /* Built-in Turkish ISP Profiles & Desync API (src/desync.c) */
-#define TURKDPI_NUM_PROFILES 7
+#define TURKDPI_PROFILE_LEAGUE 7
+#define TURKDPI_NUM_PROFILES 8
 extern const dpi_profile_t g_turkdpi_profiles[TURKDPI_NUM_PROFILES];
 
 void desync_init_defaults(void);

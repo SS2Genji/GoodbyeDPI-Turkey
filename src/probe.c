@@ -386,7 +386,9 @@ int probe_find_best_profile(volatile const dpi_profile_t **active_profile_ptr) {
      *   3 -> Superonline Alternatif 2 (Sabit TTL 4 + BadSeq)
      *   4 -> Superonline Alternatif 3 (Klasik TTL 3)
      */
-    static const int probe_order[TURKDPI_NUM_PROFILES] = { 0, 1, 5, 2, 6, 3, 4 };
+    /* Manual compatibility profiles are not candidates for the Discord-only probe. */
+    static const int probe_order[] = { 0, 1, 5, 2, 6, 3, 4 };
+    const int probe_count = (int)(sizeof(probe_order) / sizeof(probe_order[0]));
 
     printf("\n============================================================================\n");
     printf("  [*] TurkDPI Otomatik ISS & DPI Analiz Motoru Baslatiliyor...\n");
@@ -404,7 +406,7 @@ int probe_find_best_profile(volatile const dpi_profile_t **active_profile_ptr) {
     printf("  [+] Hedef Cozumlendi: discord.com -> %u.%u.%u.%u:443 (TLS 1.3 SNI Probe)\n\n",
            dip[0], dip[1], dip[2], dip[3]);
 
-    for (int i = 0; i < TURKDPI_NUM_PROFILES; i++) {
+    for (int i = 0; i < probe_count; i++) {
         int pidx = probe_order[i];
         const dpi_profile_t *prof = &g_turkdpi_profiles[pidx];
 
@@ -412,7 +414,7 @@ int probe_find_best_profile(volatile const dpi_profile_t **active_profile_ptr) {
         flush_dns_cache();
         Sleep(80);
 
-        printf("  [Test %d/%d] Profil [%d]: %s\n", i + 1, TURKDPI_NUM_PROFILES, pidx, prof->name);
+        printf("  [Test %d/%d] Profil [%d]: %s\n", i + 1, probe_count, pidx, prof->name);
         printf("             Hedef ISS : %s\n", prof->isp_hint);
 
         int ms_discord = probe_test_https_target(discord_ip, 443, "discord.com", 1500);

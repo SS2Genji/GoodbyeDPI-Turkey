@@ -228,6 +228,20 @@ const dpi_profile_t g_turkdpi_profiles[TURKDPI_NUM_PROFILES] = {
         .dnsv4_port = PORT_DNS_53,
         .dnsv6_addr = {0x26,0x06,0x47,0x00,0x47,0x00,0,0,0,0,0,0,0x00,0x00,0x11,0x11},
         .dnsv6_port = PORT_DNS_53,
+    },
+    /* [7] Manual compatibility profile: one-byte TLS split, TTL-only decoy.
+     * Keep DNS, QUIC and voice UDP untouched. Fixed TTL is path-dependent;
+     * this profile is deliberately excluded from the automatic ISP probe.
+     */
+    {
+        .name = "Turk Telekom Alternatif (1 Bayt TLS + Sabit TTL 3)",
+        .isp_hint = "Turk Telekom; sabit TTL ag yoluna gore test edilmelidir",
+        .do_fragment_https = 1,
+        .do_native_frag = 1,
+        .do_fake_packet = 1,
+        .fooling_flags = FOOL_TTL,
+        .fake_ttl = 3,
+        .https_frag_size = 1,
     }
 };
 
