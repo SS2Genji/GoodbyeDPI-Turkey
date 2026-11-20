@@ -100,6 +100,61 @@ int dns_is_dns_packet(const char *packet_data, const unsigned int packet_dataLen
     return 0;
 }
 
+size_t dns_extract_qname(const char *packet_data, unsigned int packet_dataLen,
+                         char *out_host, size_t out_cap) {
+    if (!packet_data || !out_host || out_cap < 2 || packet_dataLen < 17)
+        return 0;
+
+    const unsigned char *p = (const unsigned char *)packet_data;
+    if ((p[2] & 0x80u) != 0)
+        return 0;
+    unsigned int qdcount = ((unsigned int)p[4] << 8) | (unsigned int)p[5];
+    if (qdcount == 0)
+        return 0;
+
+    unsigned int pos = 12;
+    size_t out_len = 0;
+    int terminated = 0;
+
+    while (pos < packet_dataLen) {
+        unsigned char label_len = p[pos++];
+        if (label_len == 0) {
+            terminated = 1;
+            break;
+        }
+        /* Reject DNS compression pointers (>= 0xC0) and invalid labels (> 63) */
+        if ((label_len & 0xC0u) != 0 || label_len > 63u)
+            return 0;
+        /* Label bytes + root terminator (0x00) must fit within packet_dataLen */
+        if (pos + (unsigned int)label_len >= packet_dataLen)
+            return 0;
+
+        if (out_len > 0) {
+            if (out_len + 1 >= out_cap)
+                return 0;
+            out_host[out_len++] = '.';
+        }
+        if (out_len + (size_t)label_len >= out_cap)
+            return 0;
+
+        for (unsigned char j = 0; j < label_len; j++) {
+            uint8_t ch = p[pos + j];
+            if (ch == 0 || ch == '.')
+                return 0;
+            if (ch >= 'A' && ch <= 'Z')
+                ch |= 0x20u;
+            out_host[out_len++] = (char)ch;
+        }
+        pos += (unsigned int)label_len;
+    }
+
+    if (!terminated || out_len == 0 || pos + 4u > packet_dataLen)
+        return 0;
+
+    out_host[out_len] = '\0';
+    return out_len;
+}
+
 int dns_handle_outgoing(const uint32_t *srcip, const uint16_t srcport,
                         const uint32_t *dstip, const uint16_t dstport,
                         const char *packet_data, const unsigned int packet_dataLen,
@@ -449,29 +504,118 @@ static int host_table_insert(const char *host, size_t len) {
     return 0;
 }
 
+/* Built-in Turkey blocked-services hostlist (Game-Friendly Targeted Mode).
+ * Deliberately excludes rbxcdn.com so tr.rbxcdn.com resolves directly via local
+ * ISP Akamai CDN rather than Yandex DNS (77.88.8.8:1253). */
+static const char *const g_default_blocked_hosts[] = {
+    /* Discord */
+    "discord.com",
+    "discord.gg",
+    "discordapp.com",
+    "discordapp.net",
+    "discord.media",
+    "discordcdn.com",
+    "discordstatus.com",
+    "dis.gd",
+    "discord.co",
+    "discord.new",
+    "discord.gift",
+    "discord.design",
+    "discord.dev",
+    "discord.tools",
+    "discord-activities.com",
+    "discordsays.com",
+    "discordpartygames.com",
+    /* Roblox */
+    "roblox.com",
+    "rbx.com",
+    "robloxlabs.com",
+    "rbxtrk.com",
+    "rbxinfra.net",
+    "rblx.co",
+    /* Wattpad */
+    "wattpad.com",
+    "w.tt"
+};
+
+void blackwhitelist_init_defaults(void) {
+    memset(g_host_table, 0, sizeof(g_host_table));
+    g_host_arena_size = 0;
+
+    const size_t count = sizeof(g_default_blocked_hosts) / sizeof(g_default_blocked_hosts[0]);
+    for (size_t i = 0; i < count; i++) {
+        host_table_insert(g_default_blocked_hosts[i], strlen(g_default_blocked_hosts[i]));
+    }
+}
+
+static int blackwhitelist_read_file(const char *filename) {
+    if (!filename) return -1;
+    FILE *fp = fopen(filename, "r");
+    if (!fp) return -1;
+
+    char line[1024];
+    int cnt = 0;
+    int first_line = 1;
+    while (fgets(line, sizeof(line), fp)) {
+        size_t start = 0;
+        size_t len = strlen(line);
+
+        if (first_line) {
+            first_line = 0;
+            if (len >= 3 &&
+                (unsigned char)line[0] == 0xEFu &&
+                (unsigned char)line[1] == 0xBBu &&
+                (unsigned char)line[2] == 0xBFu) {
+                start = 3;
+            }
+        }
+
+        for (size_t k = start; k < len; k++) {
+            if (line[k] == '#') {
+                len = k;
+                break;
+            }
+        }
+
+        while (len > start &&
+               (line[len - 1] == '\r' || line[len - 1] == '\n' ||
+                line[len - 1] == ' '  || line[len - 1] == '\t' ||
+                line[len - 1] == '.')) {
+            len--;
+        }
+        while (start < len &&
+               (line[start] == ' ' || line[start] == '\t' || line[start] == '.')) {
+            start++;
+        }
+
+        if (start >= len) continue;
+        size_t clean_len = len - start;
+        if (clean_len > HOST_MAXLEN) continue;
+        if (host_table_insert(line + start, clean_len)) cnt++;
+    }
+    fclose(fp);
+    return cnt;
+}
+
 bool blackwhitelist_load_list(const char *filename) {
     if (!filename) return false;
-    FILE *fp = fopen(filename, "r");
-    if (!fp) return false;
+    FILE *probe_fp = fopen(filename, "r");
+    if (!probe_fp) return false;
+    fclose(probe_fp);
 
     memset(g_host_table, 0, sizeof(g_host_table));
     g_host_arena_size = 0;
 
-    char line[HOST_MAXLEN + 64];
-    int cnt = 0;
-    while (fgets(line, sizeof(line), fp)) {
-        size_t len = strlen(line);
-        while (len > 0 && (line[len - 1] == '\r' || line[len - 1] == '\n' || line[len - 1] == ' ' || line[len - 1] == '\t'))
-            len--;
-        size_t start = 0;
-        while (start < len && (line[start] == ' ' || line[start] == '\t'))
-            start++;
-        if (start >= len || line[start] == '#') continue;
-        if (len - start > HOST_MAXLEN) continue;
-        if (host_table_insert(line + start, len - start)) cnt++;
-    }
+    int cnt = blackwhitelist_read_file(filename);
+    if (cnt < 0) return false;
     printf("Loaded %d hosts from file %s\n", cnt, filename);
-    fclose(fp);
+    return true;
+}
+
+bool blackwhitelist_append_list(const char *filename) {
+    int cnt = blackwhitelist_read_file(filename);
+    if (cnt < 0) return false;
+    printf("Appended %d custom hosts from file %s\n", cnt, filename);
     return true;
 }
 

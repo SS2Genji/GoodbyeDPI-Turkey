@@ -53,6 +53,7 @@ Sağ alt köşedeki uygulama simgesine sağ tıkladığınızda (veya sol tıkla
 - **Otomatik İSS Algıla (En Hızlı Profili Bul):** 7 farklı Türkiye İSS profilini gerçek TLS 1.3 bağlantısıyla arka planda test eder ve en düşük gecikmeli çalışan profili otomatik seçer.
 - **Discord & TLS 1.3 Bağlantısını Test Et:** `discord.com` ile canlı TLS 1.3 el sıkışması yaparak bağlantı süresini milisaniye (`ms`) cinsinden ölçer ve bildirim olarak gösterir.
 - **Profil Seçimi (`[0]` – `[7]`):** Uygulamayı kapatıp açmaya gerek kalmadan Türk Telekom, TurkNet, Kablonet ve Superonline alternatif profilleri arasında anında geçiş yapar ve DNS önbelleğini temizler.
+- **Oyun Dostu Mod (Varsayılan Aktif):** Yalnızca engelli sitelere (Discord, Roblox, Wattpad ve isteğe bağlı `domains.txt`) DPI ve DNS yönlendirmesi uygular. Online oyunlar (Rob Run, Valorant, Steam vb.) ve normal web siteleri filtreden etkilenmez. İstediğinizde sağ tık menüsünden **Tüm İnternet Trafiği** moduna geçebilirsiniz.
 - **DPI Filtresini Duraklat / Başlat:** Uygulamadan çıkmadan paket filtrelemeyi geçici olarak duraklatır veya yeniden başlatır.
 - **Windows Açılışında Otomatik Başlat:** Eski `service_install.cmd` dosyalarına gerek kalmadan, bilgisayar her açıldığında uygulamanın sağ alt tepside otomatik olarak başlamasını sağlar.
 - **Sürücü ve Ayarları Sıfırla (Tamamen Kaldır):** Çalışan filtreyi durdurur, `WinDivert` çekirdek sürücüsünü kaldırır, otomatik başlatma görevini ve `turkdpi.cfg` ayar dosyasını silip DNS önbelleğini temizler.
@@ -81,6 +82,14 @@ Superonline Fiber veya katı DPI uygulayan diğer servis sağlayıcılarda stand
 
 > [!NOTE]
 > DNS yönlendirmesi içermeyen **Profil 1, 2 veya 6**'yı manuel olarak seçerseniz, Windows ağ ayarlarınızdan DNS adresinizi **Yandex DNS (`77.88.8.8` / `77.88.8.1`)** veya **Cloudflare DNS (`1.1.1.1` / `1.0.0.1`)** olarak ayarlamanız gerekir. **Profil 0, 3, 4 ve 5** ise DNS trafiğini otomatik olarak port `1253` üzerinden Yandex DNS'e yönlendirir.
+
+### Oyun Dostu Mod (Varsayılan) ve Özel Alan Adları (`domains.txt`)
+
+Varsayılan olarak açık gelen **Oyun Dostu Mod**, gereksiz DPI paket bölme/sahte paket gönderme ve Yandex DNS yönlendirmesini yalnızca Türkiye'de erişim engelli hizmetlere (**Discord**, **Roblox** — görsel önbelleği `rbxcdn.com` hariç tutularak yerel CDN hızında — ve **Wattpad**) uygular:
+
+- Online oyun sunucuları (ör. `Rob Run / kefir.games`, `Valorant`, `Steam`), bankacılık ve normal siteler yerel DNS'iniz üzerinden doğrudan ve sıfır müdahaleyle çalışır.
+- Kendi eklemek istediğiniz engelli alan adları varsa `goodbyedpi.exe` ile aynı klasöre **`domains.txt`** dosyası oluşturup alt alta yazabilirsiniz (ör. `ornek-site.com`); değişikliklerin yüklenmesi için sağ tık menüsünden **Duraklat / Başlat** yapmanız yeterlidir.
+- Güvenli İnternet profili veya genel ağ engelleri için tüm trafiği yönlendirmek isterseniz, tepsi menüsünden **Oyun Dostu Mod** işaretini kaldırarak anında **Tüm Trafik** moduna geçebilirsiniz.
 
 ### Türk Telekom Alternatif — League / Vanguard uyumluluğu [7]
 

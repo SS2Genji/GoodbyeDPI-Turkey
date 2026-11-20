@@ -198,6 +198,120 @@ static void test_league_compatibility_profile(void) {
     puts("[PASS] Manual League/Vanguard profile packet regression checks");
 }
 
+static void test_targeted_game_friendly_mode(void) {
+    unsigned char qbuf[512];
+    char host_out[HOST_MAXLEN + 1];
+
+    /* 1. Valid DNS QNAME extraction tests (including mixed case) */
+    const char *domains[] = {
+        "discord.com",
+        "gateway.discord.gg",
+        "tr.rbxcdn.com",
+        "ghl.rob-run.kefir.games"
+    };
+    for (size_t i = 0; i < sizeof(domains) / sizeof(domains[0]); i++) {
+        int qlen = probe_build_dns_query(qbuf, sizeof(qbuf), domains[i], 0x1234);
+        assert(qlen > 16);
+        size_t extracted = dns_extract_qname((const char *)qbuf, (unsigned int)qlen,
+                                             host_out, sizeof(host_out));
+        assert(extracted == strlen(domains[i]));
+        assert(strcmp(host_out, domains[i]) == 0);
+    }
+
+    int mix_len = probe_build_dns_query(qbuf, sizeof(qbuf), "DisCord.COM", 0xABCD);
+    assert(mix_len > 16);
+    assert(dns_extract_qname((const char *)qbuf, (unsigned int)mix_len,
+                             host_out, sizeof(host_out)) == 11);
+    assert(strcmp(host_out, "discord.com") == 0);
+
+    /* 2. Malformed / truncated / compressed DNS QNAME rejection (must return 0 safely) */
+    assert(dns_extract_qname((const char *)qbuf, 16, host_out, sizeof(host_out)) == 0);
+    assert(dns_extract_qname((const char *)qbuf, (unsigned int)(mix_len - 1), host_out, sizeof(host_out)) == 0);
+    assert(dns_extract_qname((const char *)qbuf, (unsigned int)(mix_len - 4), host_out, sizeof(host_out)) == 0);
+    assert(dns_extract_qname((const char *)qbuf, (unsigned int)mix_len, host_out, 5) == 0);
+
+    unsigned char bad_qdcount[32];
+    memcpy(bad_qdcount, qbuf, (size_t)mix_len);
+    bad_qdcount[5] = 0; /* QDCOUNT = 0 */
+    assert(dns_extract_qname((const char *)bad_qdcount, (unsigned int)mix_len, host_out, sizeof(host_out)) == 0);
+
+    unsigned char bad_qr[32];
+    memcpy(bad_qr, qbuf, (size_t)mix_len);
+    bad_qr[2] |= 0x80u; /* QR = 1 (response) */
+    assert(dns_extract_qname((const char *)bad_qr, (unsigned int)mix_len, host_out, sizeof(host_out)) == 0);
+
+    unsigned char bad_ptr[32];
+    memcpy(bad_ptr, qbuf, (size_t)mix_len);
+    bad_ptr[12] = 0xC0u; /* Compression pointer in QNAME */
+    bad_ptr[13] = 0x0Cu;
+    assert(dns_extract_qname((const char *)bad_ptr, (unsigned int)mix_len, host_out, sizeof(host_out)) == 0);
+
+    unsigned char bad_label[32];
+    memcpy(bad_label, qbuf, (size_t)mix_len);
+    bad_label[12] = 64; /* > 63 label length */
+    assert(dns_extract_qname((const char *)bad_label, (unsigned int)mix_len, host_out, sizeof(host_out)) == 0);
+
+    /* 3. Built-in defaults + optional custom domains.txt append (excludes rbxcdn.com) */
+    blackwhitelist_init_defaults();
+    assert(blackwhitelist_check_hostname("discord.com", 11) == true);
+    assert(blackwhitelist_check_hostname("gateway.discord.gg", 18) == true);
+    assert(blackwhitelist_check_hostname("cdn.discordapp.com", 18) == true);
+    assert(blackwhitelist_check_hostname("media.discordapp.net", 20) == true);
+    assert(blackwhitelist_check_hostname("www.roblox.com", 14) == true);
+    assert(blackwhitelist_check_hostname("apis.roblox.com", 15) == true);
+    assert(blackwhitelist_check_hostname("wattpad.com", 11) == true);
+    assert(blackwhitelist_check_hostname("www.w.tt", 8) == true);
+
+    assert(blackwhitelist_check_hostname("tr.rbxcdn.com", 13) == false);
+    assert(blackwhitelist_check_hostname("ghl.rob-run.kefir.games", 23) == false);
+    assert(blackwhitelist_check_hostname("prod-gcore-amsterdam-1-ghl-http-proxy-0.rob-run.kefir.games", 59) == false);
+    assert(blackwhitelist_check_hostname("eu2.vg.ac.pvp.net", 17) == false);
+    assert(blackwhitelist_check_hostname("google.com", 10) == false);
+    assert(blackwhitelist_check_hostname("steamcommunity.com", 16) == false);
+
+    FILE *dfp = fopen("/tmp/goodbyedpi_test_domains_extra.txt", "wb");
+    assert(dfp != NULL);
+    static const unsigned char utf8_bom[3] = { 0xEF, 0xBB, 0xBF };
+    fwrite(utf8_bom, 1, 3, dfp);
+    fprintf(dfp, "# Ozel engelli alan adlari\n\n  .example-blocked.org   # inline yorum\n");
+    fclose(dfp);
+
+    assert(blackwhitelist_append_list("/tmp/goodbyedpi_test_domains_extra.txt") == true);
+    assert(blackwhitelist_check_hostname("sub.example-blocked.org", 23) == true);
+    assert(blackwhitelist_check_hostname("discord.com", 11) == true);
+    assert(blackwhitelist_check_hostname("ghl.rob-run.kefir.games", 23) == false);
+    assert(blackwhitelist_append_list("/tmp/nonexistent_turkdpi_domains.txt") == false);
+    assert(blackwhitelist_check_hostname("discord.com", 11) == true);
+
+    /* 4. Targeted Mode gating check (Oyun Dostu vs Tum Trafik / Profile [7]) */
+    int saved_targeted = g_targeted_mode;
+    g_targeted_mode = 1;
+    assert(is_host_targeted(&g_turkdpi_profiles[0], "discord.com", 11) == 1);
+    assert(is_host_targeted(&g_turkdpi_profiles[0], "tr.rbxcdn.com", 13) == 0);
+    assert(is_host_targeted(&g_turkdpi_profiles[0], "ghl.rob-run.kefir.games", 23) == 0);
+
+    g_targeted_mode = 0;
+    assert(is_host_targeted(&g_turkdpi_profiles[TURKDPI_PROFILE_LEAGUE], "eu2.vg.ac.pvp.net", 17) == 1);
+    assert(is_host_targeted(&g_turkdpi_profiles[TURKDPI_PROFILE_LEAGUE], "ghl.rob-run.kefir.games", 23) == 1);
+    g_targeted_mode = saved_targeted;
+
+    /* 5. Tightened UDP signature detection (no generic game UDP false positives) */
+    unsigned char stun_pld[20] = {0};
+    stun_pld[0] = 0x00; stun_pld[1] = 0x01;
+    stun_pld[4] = 0x21; stun_pld[5] = 0x12; stun_pld[6] = 0xA4; stun_pld[7] = 0x42;
+    assert(desync_is_discord_or_webrtc_udp(htons(55000), htons(50005), stun_pld, sizeof(stun_pld)) == 1);
+
+    unsigned char dtls_pld[25] = {0};
+    dtls_pld[0] = 0x16; dtls_pld[1] = 0xFE; dtls_pld[2] = 0xFD;
+    assert(desync_is_discord_or_webrtc_udp(htons(55000), htons(50005), dtls_pld, sizeof(dtls_pld)) == 1);
+
+    unsigned char game_pld[48] = {0};
+    game_pld[0] = 0x00; game_pld[1] = 0x05; game_pld[4] = 0xAA; game_pld[5] = 0xBB;
+    assert(desync_is_discord_or_webrtc_udp(htons(55000), htons(50005), game_pld, sizeof(game_pld)) == 0);
+
+    puts("[PASS] Game-friendly targeted mode, DNS QNAME parser & UDP signature checks");
+}
+
 int main(int argc, char *argv[]) {
     (void)argc; (void)argv;
     printf("=== TurkDPI v2.0 Native Test & Micro-Benchmark Suite ===\n\n");
@@ -212,6 +326,7 @@ int main(int argc, char *argv[]) {
     desync_cleanup();
     desync_init_defaults();
     test_league_compatibility_profile();
+    test_targeted_game_friendly_mode();
 
     /* 1. Test & Benchmark HTTP header search (fast_memmem) */
     unsigned char http_pkt[1600];

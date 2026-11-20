@@ -31,10 +31,12 @@
 #include "turkdpi.h"
 
 #define SERVICE_NAME "GoodbyeDPI"
+#define DOMAINS_FILE_NAME "domains.txt"
 
 /* Global active profile pointer (atomically swapped during --auto probe) */
 static dpi_profile_t g_custom_profile;
 static volatile const dpi_profile_t *g_active_profile = &g_turkdpi_profiles[0];
+static volatile int g_targeted_mode = 1; /* 1 = Oyun Dostu (Sadece engelli siteler + domains.txt), 0 = Tum trafik */
 static volatile int g_exiting = 0;
 static HANDLE g_w_filter = INVALID_HANDLE_VALUE;
 static HANDLE g_quic_filter = INVALID_HANDLE_VALUE;
@@ -186,6 +188,11 @@ static HANDLE open_divert_handle(const char *filter, UINT64 flags) {
     return INVALID_HANDLE_VALUE;
 }
 
+static inline int is_host_targeted(const dpi_profile_t *prof, const char *host, size_t len) {
+    if (!prof->do_blacklist && !g_targeted_mode) return 1;
+    return blackwhitelist_check_hostname(host, len) ? 1 : 0;
+}
+
 static DWORD WINAPI engine_worker_thread(PVOID arg) {
     (void)arg;
     static ALIGN64 char batch_buf[PACKET_BATCH_BUF_SIZE];
@@ -275,36 +282,45 @@ static DWORD WINAPI engine_worker_thread(PVOID arg) {
                     }
                     /* 2. Outbound DNS (UDP 53) Redirection & IPv6 Router DNS Leak Shield */
                     else if (ppUdpHdr->DstPort == htons(53)) {
-                        if (packet_v4 && prof->do_dnsv4_redirect) {
-                            if (dns_handle_outgoing(&ppIpHdr->SrcAddr, ppUdpHdr->SrcPort,
-                                                    &ppIpHdr->DstAddr, ppUdpHdr->DstPort,
-                                                    packet_data, packet_dataLen, 0)) {
-                                uint32_t old_dip = ppIpHdr->DstAddr;
-                                uint16_t old_dport = ppUdpHdr->DstPort;
-                                ppIpHdr->DstAddr = prof->dnsv4_addr;
-                                ppUdpHdr->DstPort = prof->dnsv4_port;
-                                if (addr.IPChecksum && addr.UDPChecksum && ppUdpHdr->Checksum) {
-                                    ppIpHdr->Checksum = checksum_update_uint32(ppIpHdr->Checksum, old_dip, prof->dnsv4_addr);
-                                    uint16_t ucheck = checksum_update_uint32(ppUdpHdr->Checksum, old_dip, prof->dnsv4_addr);
-                                    ucheck = checksum_update_uint16(ucheck, old_dport, prof->dnsv4_port);
-                                    ppUdpHdr->Checksum = udp_checksum_fix_zero(ucheck);
-                                } else {
-                                    should_recalc_checksum = 1;
+                        int dns_should_redirect = 1;
+                        if (prof->do_blacklist || g_targeted_mode) {
+                            char qname[HOST_MAXLEN + 1];
+                            size_t qlen = dns_extract_qname((const char *)packet_data, packet_dataLen,
+                                                            qname, sizeof(qname));
+                            dns_should_redirect = (qlen > 0 && blackwhitelist_check_hostname(qname, qlen)) ? 1 : 0;
+                        }
+                        if (dns_should_redirect) {
+                            if (packet_v4 && prof->do_dnsv4_redirect) {
+                                if (dns_handle_outgoing(&ppIpHdr->SrcAddr, ppUdpHdr->SrcPort,
+                                                        &ppIpHdr->DstAddr, ppUdpHdr->DstPort,
+                                                        packet_data, packet_dataLen, 0)) {
+                                    uint32_t old_dip = ppIpHdr->DstAddr;
+                                    uint16_t old_dport = ppUdpHdr->DstPort;
+                                    ppIpHdr->DstAddr = prof->dnsv4_addr;
+                                    ppUdpHdr->DstPort = prof->dnsv4_port;
+                                    if (addr.IPChecksum && addr.UDPChecksum && ppUdpHdr->Checksum) {
+                                        ppIpHdr->Checksum = checksum_update_uint32(ppIpHdr->Checksum, old_dip, prof->dnsv4_addr);
+                                        uint16_t ucheck = checksum_update_uint32(ppUdpHdr->Checksum, old_dip, prof->dnsv4_addr);
+                                        ucheck = checksum_update_uint16(ucheck, old_dport, prof->dnsv4_port);
+                                        ppUdpHdr->Checksum = udp_checksum_fix_zero(ucheck);
+                                    } else {
+                                        should_recalc_checksum = 1;
+                                    }
                                 }
-                            }
-                        } else if (packet_v6 && (prof->do_dnsv4_redirect || prof->do_dnsv6_redirect)) {
-                            /* Check if destination is Link-Local Router IPv6 DNS (fe80::/10) */
-                            uint32_t first_word = ntohl(ppIpV6Hdr->DstAddr[0]);
-                            if ((first_word & 0xFFC00000u) == 0xFE800000u && prof->do_dnsv4_redirect) {
-                                /* Drop router link-local IPv6 DNS leak so Windows falls back to IPv4 UDP 53 in <1ms */
-                                should_reinject = 0;
-                            } else if (prof->do_dnsv6_redirect) {
-                                if (dns_handle_outgoing(ppIpV6Hdr->SrcAddr, ppUdpHdr->SrcPort,
-                                                        ppIpV6Hdr->DstAddr, ppUdpHdr->DstPort,
-                                                        packet_data, packet_dataLen, 1)) {
-                                    memcpy(ppIpV6Hdr->DstAddr, prof->dnsv6_addr, 16);
-                                    ppUdpHdr->DstPort = prof->dnsv6_port;
-                                    should_recalc_checksum = 1;
+                            } else if (packet_v6 && (prof->do_dnsv4_redirect || prof->do_dnsv6_redirect)) {
+                                /* Check if destination is Link-Local Router IPv6 DNS (fe80::/10) */
+                                uint32_t first_word = ntohl(ppIpV6Hdr->DstAddr[0]);
+                                if ((first_word & 0xFFC00000u) == 0xFE800000u && prof->do_dnsv4_redirect) {
+                                    /* Drop router link-local IPv6 DNS leak so Windows falls back to IPv4 UDP 53 in <1ms */
+                                    should_reinject = 0;
+                                } else if (prof->do_dnsv6_redirect) {
+                                    if (dns_handle_outgoing(ppIpV6Hdr->SrcAddr, ppUdpHdr->SrcPort,
+                                                            ppIpV6Hdr->DstAddr, ppUdpHdr->DstPort,
+                                                            packet_data, packet_dataLen, 1)) {
+                                        memcpy(ppIpV6Hdr->DstAddr, prof->dnsv6_addr, 16);
+                                        ppUdpHdr->DstPort = prof->dnsv6_port;
+                                        should_recalc_checksum = 1;
+                                    }
                                 }
                             }
                         }
@@ -371,7 +387,7 @@ static DWORD WINAPI engine_worker_thread(PVOID arg) {
                                      extract_sni_info(packet_data, packet_dataLen, &sni));
 
                     if (is_tls_ch) {
-                        if (!prof->do_blacklist || blackwhitelist_check_hostname(sni.host_ptr, sni.host_len)) {
+                        if (is_host_targeted(prof, sni.host_ptr, sni.host_len)) {
                             flush_tx_batch(g_w_filter, tx_batch_buf, &tx_batch_len, tx_addr_batch, &tx_batch_count);
 
                             /* 1. Inject Multi-Fooling Decoy ClientHello if enabled */
@@ -432,7 +448,7 @@ static DWORD WINAPI engine_worker_thread(PVOID arg) {
                             if (find_header_and_get_info(method_addr,
                                                          packet_dataLen - (unsigned int)((const char *)method_addr - (const char *)packet_data),
                                                          "\r\nHost: ", &hdr_name_addr, &host_addr, &host_len) &&
-                                (!prof->do_blacklist || blackwhitelist_check_hostname(host_addr, host_len))) {
+                                is_host_targeted(prof, host_addr, host_len)) {
 
                                 flush_tx_batch(g_w_filter, tx_batch_buf, &tx_batch_len, tx_addr_batch, &tx_batch_count);
 
@@ -583,6 +599,7 @@ static void sigint_handler(int sig) {
 #define ID_TRAY_AUTOSTART       1013
 #define ID_TRAY_CLEANUP         1014
 #define ID_TRAY_EXIT            1015
+#define ID_TRAY_TARGETED        1016
 
 #define CONFIG_FILE_NAME        "turkdpi.cfg"
 #define AUTOSTART_TASK_NAME     "TurkDPI_Autostart"
@@ -745,19 +762,22 @@ static int load_saved_profile(int *has_saved) {
     FILE *fp = fopen(CONFIG_FILE_NAME, "r");
     if (!fp) return 0;
     int idx = 0;
-    if (fscanf(fp, "%d", &idx) == 1 && idx >= 0 && idx < TURKDPI_NUM_PROFILES) {
+    int tmode = -1;
+    int n = fscanf(fp, "%d %d", &idx, &tmode);
+    fclose(fp);
+    if (n >= 1 && idx >= 0 && idx < TURKDPI_NUM_PROFILES) {
         *has_saved = 1;
-        fclose(fp);
+        g_targeted_mode = (n >= 2) ? (tmode != 0 ? 1 : 0)
+                                   : (idx == TURKDPI_PROFILE_LEAGUE ? 0 : 1);
         return idx;
     }
-    fclose(fp);
     return 0;
 }
 
 static void save_selected_profile(int idx) {
     FILE *fp = fopen(CONFIG_FILE_NAME, "w");
     if (fp) {
-        fprintf(fp, "%d\n", idx);
+        fprintf(fp, "%d %d\n", idx, g_targeted_mode ? 1 : 0);
         fclose(fp);
     }
 }
@@ -780,11 +800,19 @@ static void tray_update_tooltip(void) {
     if (!g_tray_hwnd) return;
     g_nid.uFlags = NIF_TIP;
     if (g_probing) {
-        swprintf(g_nid.szTip, 127, L"TurkDPI v2.0 — İSS Analiz Ediliyor...");
+        swprintf(g_nid.szTip, 127, L"TurkDPI v2.1 — İSS Analiz Ediliyor...");
     } else if (g_w_filter != INVALID_HANDLE_VALUE) {
-        swprintf(g_nid.szTip, 127, L"TurkDPI v2.0 — Aktif [Profil %d]", g_current_profile_idx);
+        if (g_targeted_mode) {
+            swprintf(g_nid.szTip, 127, L"TurkDPI v2.1 — Profil %d (Oyun Dostu)", g_current_profile_idx);
+        } else {
+            swprintf(g_nid.szTip, 127, L"TurkDPI v2.1 — Profil %d (Tüm Trafik)", g_current_profile_idx);
+        }
     } else {
-        swprintf(g_nid.szTip, 127, L"TurkDPI v2.0 — Duraklatıldı");
+        if (g_targeted_mode) {
+            swprintf(g_nid.szTip, 127, L"TurkDPI v2.1 — Duraklatıldı (Oyun Dostu)");
+        } else {
+            swprintf(g_nid.szTip, 127, L"TurkDPI v2.1 — Duraklatıldı (Tüm Trafik)");
+        }
     }
     g_nid.szTip[127] = L'\0';
     Shell_NotifyIconW(NIM_MODIFY, &g_nid);
@@ -792,6 +820,9 @@ static void tray_update_tooltip(void) {
 
 static int start_engine_bg(void) {
     if (g_w_filter != INVALID_HANDLE_VALUE) return 1;
+    /* Load built-in hostlist + optional user domains.txt before launching worker thread */
+    blackwhitelist_init_defaults();
+    blackwhitelist_append_list(DOMAINS_FILE_NAME);
     g_exiting = 0;
     g_w_filter = open_divert_handle(TURKDPI_MAIN_FILTER, 0);
     if (g_w_filter == INVALID_HANDLE_VALUE) {
@@ -864,11 +895,19 @@ static void show_tray_context_menu(HWND hwnd) {
 
     wchar_t status_line[128];
     if (g_probing) {
-        swprintf(status_line, 127, L"⏳ TurkDPI v2.0 — İSS Profili Taranıyor...");
+        swprintf(status_line, 127, L"⏳ TurkDPI v2.1 — İSS Profili Taranıyor...");
     } else if (g_w_filter != INVALID_HANDLE_VALUE) {
-        swprintf(status_line, 127, L"● TurkDPI v2.0 — Aktif [Profil %d]", g_current_profile_idx);
+        if (g_targeted_mode) {
+            swprintf(status_line, 127, L"● TurkDPI v2.1 — Profil %d [Oyun Dostu]", g_current_profile_idx);
+        } else {
+            swprintf(status_line, 127, L"● TurkDPI v2.1 — Profil %d [Tüm Trafik]", g_current_profile_idx);
+        }
     } else {
-        swprintf(status_line, 127, L"○ TurkDPI v2.0 — Duraklatıldı");
+        if (g_targeted_mode) {
+            swprintf(status_line, 127, L"○ TurkDPI v2.1 — Duraklatıldı [Oyun Dostu]");
+        } else {
+            swprintf(status_line, 127, L"○ TurkDPI v2.1 — Duraklatıldı [Tüm Trafik]");
+        }
     }
     AppendMenuW(h_menu, MF_STRING | MF_DISABLED | MF_GRAYED, 0, status_line);
     AppendMenuW(h_menu, MF_SEPARATOR, 0, NULL);
@@ -887,6 +926,9 @@ static void show_tray_context_menu(HWND hwnd) {
         AppendMenuW(h_menu, flags, ID_TRAY_PROFILE_BASE + i, g_profile_labels_w[i]);
     }
 
+    AppendMenuW(h_menu, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(h_menu, MF_STRING | (g_targeted_mode ? MF_CHECKED : 0),
+                ID_TRAY_TARGETED, L"🎮 Oyun Dostu Mod (Sadece Engelli Siteler + domains.txt)");
     AppendMenuW(h_menu, MF_SEPARATOR, 0, NULL);
     if (g_w_filter != INVALID_HANDLE_VALUE) {
         AppendMenuW(h_menu, MF_STRING, ID_TRAY_TOGGLE, L"⏸ DPI Filtresini Duraklat");
@@ -932,9 +974,15 @@ static LRESULT CALLBACK tray_wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
         case WM_COMMAND: {
             UINT cmd = LOWORD(wparam);
             if (cmd >= ID_TRAY_PROFILE_BASE && cmd < ID_TRAY_PROFILE_BASE + TURKDPI_NUM_PROFILES) {
+                int prev_idx = g_current_profile_idx;
                 int idx = (int)(cmd - ID_TRAY_PROFILE_BASE);
                 g_current_profile_idx = idx;
                 g_active_profile = &g_turkdpi_profiles[idx];
+                if (idx == TURKDPI_PROFILE_LEAGUE) {
+                    g_targeted_mode = 0;
+                } else if (prev_idx == TURKDPI_PROFILE_LEAGUE) {
+                    g_targeted_mode = 1;
+                }
                 save_selected_profile(idx);
                 if (g_w_filter == INVALID_HANDLE_VALUE) {
                     start_engine_bg();
@@ -942,7 +990,22 @@ static LRESULT CALLBACK tray_wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
                     flush_dns_cache();
                     tray_update_tooltip();
                 }
-                tray_show_balloon(L"TurkDPI — Profil Değiştirildi", g_profile_labels_w[idx], NIIF_INFO);
+                tray_show_balloon(L"TurkDPI — Profil Değiştirildi",
+                                  (idx == TURKDPI_PROFILE_LEAGUE)
+                                      ? L"[7] Türk Telekom Alternatif seçildi (League/Vanguard için Tüm Trafik modu aktif)."
+                                      : g_profile_labels_w[idx],
+                                  NIIF_INFO);
+            } else if (cmd == ID_TRAY_TARGETED) {
+                g_targeted_mode = !g_targeted_mode;
+                save_selected_profile(g_current_profile_idx);
+                flush_dns_cache();
+                tray_update_tooltip();
+                tray_show_balloon(
+                    g_targeted_mode ? L"TurkDPI — Oyun Dostu Mod AKTİF"
+                                    : L"TurkDPI — Tüm İnternet Trafiği Modu AKTİF",
+                    g_targeted_mode ? L"Sadece engelli siteler (Discord, Roblox, Wattpad + domains.txt) yönlendirilir. Oyunlar etkilenmez."
+                                    : L"DPI ve DNS filtresi tüm internet trafiğine uygulanıyor (Güvenli İnternet / tüm engeller için).",
+                    NIIF_INFO);
             } else if (cmd == ID_TRAY_AUTO) {
                 tray_show_balloon(L"TurkDPI — Otomatik İSS Algılama",
                                   L"İSS'niz için en hızlı çalışan profil test ediliyor, lütfen birkaç saniye bekleyin...",
@@ -1018,6 +1081,9 @@ static int run_system_tray_app(int initial_profile, int force_auto) {
     if (initial_profile >= 0 && initial_profile < TURKDPI_NUM_PROFILES) {
         g_current_profile_idx = initial_profile;
         has_saved = 1;
+        if (initial_profile == TURKDPI_PROFILE_LEAGUE) {
+            g_targeted_mode = 0;
+        }
     } else {
         g_current_profile_idx = load_saved_profile(&has_saved);
     }
@@ -1348,11 +1414,15 @@ int main(int argc, char *argv[]) {
 #endif
 
     if (legacy_flags_used) {
+        g_targeted_mode = 0;
         if (g_custom_profile.do_fragment_https && !g_custom_profile.https_frag_size)
             g_custom_profile.https_frag_size = 2;
         if (g_custom_profile.do_fragment_http && !g_custom_profile.http_frag_size)
             g_custom_profile.http_frag_size = 2;
         g_active_profile = &g_custom_profile;
+    } else {
+        blackwhitelist_init_defaults();
+        blackwhitelist_append_list(DOMAINS_FILE_NAME);
     }
 
     g_w_filter = open_divert_handle(TURKDPI_MAIN_FILTER, 0);

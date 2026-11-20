@@ -656,11 +656,6 @@ int desync_is_discord_or_webrtc_udp(uint16_t srcport_net, uint16_t dstport_net,
         return 1;
     }
 
-    /* 4. High Discord Voice UDP port range (50000 - 65535) initial packet */
-    if (dport >= 50000 && pld_len >= 24 && pld_len <= 128 && pld[0] == 0x00) {
-        return 1;
-    }
-
     return 0;
 }
 

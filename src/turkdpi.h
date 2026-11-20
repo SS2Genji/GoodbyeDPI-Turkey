@@ -248,8 +248,10 @@ typedef struct {
 } tcp_conntrack_info_t;
 
 /* Conntrack API (src/conntrack.c) */
-void flush_dns_cache(void);
-int  dns_is_dns_packet(const char *packet_data, unsigned int packet_dataLen, int outgoing);
+void   flush_dns_cache(void);
+int    dns_is_dns_packet(const char *packet_data, unsigned int packet_dataLen, int outgoing);
+size_t dns_extract_qname(const char *packet_data, unsigned int packet_dataLen,
+                         char *out_host, size_t out_cap);
 int  dns_handle_outgoing(const uint32_t *srcip, const uint16_t srcport,
                          const uint32_t *dstip, const uint16_t dstport,
                          const char *packet_data, const unsigned int packet_dataLen,
@@ -271,7 +273,9 @@ uint8_t tcp_get_auto_ttl(const uint8_t ttl, const uint8_t autottl1,
                          const uint8_t autottl2, const uint8_t minhops,
                          const uint8_t maxttl);
 
+void blackwhitelist_init_defaults(void);
 bool blackwhitelist_load_list(const char *filename);
+bool blackwhitelist_append_list(const char *filename);
 bool blackwhitelist_check_hostname(const char *host_addr, size_t host_len);
 
 /* Built-in Turkish ISP Profiles & Desync API (src/desync.c) */
