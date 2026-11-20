@@ -1,171 +1,166 @@
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/Platform-Windows%20x64-lightgrey.svg)](#)
-[![Release](https://img.shields.io/github/v/release/SS2Genji/GoodbyeDPI-Turkey)](https://github.com/SS2Genji/GoodbyeDPI-Turkey/releases)
-[![Downloads](https://img.shields.io/github/downloads/SS2Genji/GoodbyeDPI-Turkey/total.svg)](https://github.com/SS2Genji/GoodbyeDPI-Turkey/releases)
+<div align="center">
 
-# Kaspersky Antivirüsü Hakkında Önemli Not
->
+# GoodbyeDPI-Turkey (TurkDPI v2.1)
+
+**Discord (Web, Masaüstü ve Ses/WebRTC), Roblox ve engelli servisler için saf C99, Sistem Tepsili, Oyun Dostu yüksek hızlı DPI atlatma motoru**
+
+[![Build & Package](https://github.com/SS2Genji/GoodbyeDPI-Turkey/actions/workflows/build.yml/badge.svg)](https://github.com/SS2Genji/GoodbyeDPI-Turkey/actions/workflows/build.yml)
+[![Release](https://img.shields.io/github/v/release/SS2Genji/GoodbyeDPI-Turkey?color=2ea44f&label=S%C3%BCr%C3%BCm)](https://github.com/SS2Genji/GoodbyeDPI-Turkey/releases)
+[![Downloads](https://img.shields.io/github/downloads/SS2Genji/GoodbyeDPI-Turkey/total?color=2563eb&label=%C4%B0ndirme)](https://github.com/SS2Genji/GoodbyeDPI-Turkey/releases)
+[![Platform](https://img.shields.io/badge/Platform-Windows%20x64%20%7C%20C99%20SSE4.2-475569)](#)
+[![License](https://img.shields.io/badge/Lisans-Apache%202.0-f59e0b)](LICENSE)
+
+[Hızlı Kurulum](#kurulum) · [Oyun Dostu Mod](#oyun-dostu) · [Sistem Tepsisi](#tepsi) · [Türkiye İSS Profilleri](#profiller) · [Mimari & Benchmark](#benchmark) · [Derleme](#derleme) · [Sorun Giderme](#sss)
+
+</div>
+
+---
+
+## Özet ve Öne Çıkan Özellikler
+
+Bu proje, [GoodbyeDPI](https://github.com/ValdikSS/GoodbyeDPI) ve [GoodbyeDPI-Turkey](https://github.com/cagritaskn/GoodbyeDPI-Turkey) yaklaşımlarını temel alarak **C99 + WinDivert** ile sıfırdan yeniden tasarlanmış yeni nesil DPI atlatma motorudur. Bir VPN değildir; trafiği uzak bir sunucuya yönlendirmez, bant genişliğini düşürmez ve tek başına yalnızca **3 dosya** (`goodbyedpi.exe`, `WinDivert.dll`, `WinDivert64.sys`) ile doğrudan **Windows Sistem Tepsisinde (System Tray)** çalışır.
+
+| Özellik | Açıklama |
+| :--- | :--- |
+| **Oyun Dostu Hedefli Mod (Varsayılan)** | DPI bölme, sahte paket ve DNS yönlendirmesini yalnızca engelli alan adlarına (**Discord**, **Roblox**, **Wattpad** + isteğe bağlı `domains.txt`) uygular. **Rob Run (`kefir.games`)**, **Valorant**, **Steam**, bankalar ve normal siteler sıfır müdahaleyle çalışır. |
+| **Akıllı DNS QNAME Ayrıştırıcı** | Sıfır bellek tahsisli RFC 1035 sorgu ayrıştırıcısı, UDP 53 yönlendirmesini ve IPv6 `fe80::` yerel DNS sızıntı korumasını yalnızca hedeflenen alan adları için devreye alır; diğer tüm DNS sorguları yerel DNS'iniz üzerinden gider. |
+| **Roblox CDN (`rbxcdn.com`) İstisnası** | `roblox.com` ailesi engelli listede yer alırken görsel/varlık CDN'i `rbxcdn.com` kasıtlı olarak hariç tutulur; böylece oyun kapak görselleri (`tr.rbxcdn.com`) yerel İSS Akamai CDN üzerinden eksiksiz yüklenir. |
+| **Sıkılaştırılmış Discord Ses / WebRTC Motoru** | UDP ses/görüntü atlatma yalnızca gerçek **Discord IP Discovery**, **RFC 5389 STUN** ve **WebRTC DTLS** imzalarını hedefler; yüksek portlardaki çevrimiçi oyun UDP trafiğine sahte paket enjekte etmez. |
+| **Saf Win32 Sistem Tepsisi** | `.cmd` betik karmaşası ve açık siyah `cmd.exe` penceresi yoktur. Dahili UAC manifesti ile yönetici izni alır; tek tıkla **İSS Auto-Probe**, canlı **TLS 1.3 test**, profil geçişi ve **Windows Başlangıç Görevi** sunar. |
+| **Donanım Hızlandırmalı Çekirdek** | `SSE4.2 CRC32C`, `SSE2` SIMD arama, $O(1)$ RFC 1624 diferansiyel checksum, toplu `WinDivertRecvEx`/`WinDivertSendEx` (64 paket/döngü) ve sıfır `malloc` conntrack tabloları kullanır. |
+
+---
+
+<a id="kurulum"></a>
+## Hızlı Kurulum
+
+1. [Releases](https://github.com/SS2Genji/GoodbyeDPI-Turkey/releases) sayfasından güncel **`GoodbyeDPI-Turkey-Optimized.zip`** arşivini indirin.
+2. Arşivi kalıcı bir klasöre çıkarın (örneğin `C:\GoodbyeDPI\`).
+3. **`goodbyedpi.exe`** dosyasına çift tıklayın ve UAC yönetici onayını verin.
+4. Uygulama doğrudan sağ alt köşedeki **Sistem Tepsisine** yerleşir. İlk çalıştırmada İSS'niz için en hızlı çalışan profili otomatik test ederek seçer ve ayarlarınızı **`turkdpi.cfg`** dosyasına kaydeder.
+
+> [!NOTE]
+> Otomatik başlatma özelliği dosya yolunu Windows Görev Zamanlayıcısına (`TurkDPI_Autostart`) kaydettiği için, programı çıkardığınız klasörü sonradan taşımamanız önerilir.
+
 > [!CAUTION]
-> Kaspersky isimli antivirüs yazılımı Rus hükümetiyle olan anlaşmasından dolayı GoodbyeDPI'ın çalışmasına engel olmaktadır. Kaspersky isimli yazılımı kullanıyorsanız, kullandıysanız veya devre dışı halde bile olsa bilgisayarınızda bulunuyorsa lütfen tamamen kaldırın. Bunu yapmadığınız takdirde GoodbyeDPI çok yüksek ihtimalle çalışmayacaktır. Kaspersky yerine alternatif antivirüs yazılımları tercih edebilir ya da Windows Defender kullanabilirsiniz.
-> Kaspersky'i GoodbyeDPI ZIP dosyasının indirme işlemi sırasında devre dışı bırakmanız, indirdikten sonra dışlamalara eklemeniz veya devre dışı bırakmanız sorunu çözmeyecektir. GoodbyeDPI'ı doğru şekilde kullanabilmek için Kaspersky isimli antivirüs yazılımını sistemden tamamen kaldırmanız gerekir.
+> **Kaspersky Antivirüs Uyumsuzluğu:** Kaspersky yazılımı (devre dışı bırakılmış, istisna eklenmiş veya yalnızca sistemde kurulu kalmış olsa bile) WinDivert sürücü paketlerini kesebilmektedir. GoodbyeDPI çalışmıyorsa ve sisteminizde Kaspersky varsa tamamen kaldırmanız gerekir; Windows Defender veya alternatif yazılımlarda ise yalnızca uygulama klasörünü dışlamaya eklemeniz yeterlidir.
 
-## Özet
+---
 
-Bu proje, Discord (Web, masaüstü uygulaması ve sesli sohbet / WebRTC UDP kanalları dahil) ve diğer engelli site ile uygulamalara VPN kullanmadan ve internet hızında yavaşlama olmadan erişmek için [GoodbyeDPI-Turkey](https://github.com/cagritaskn/GoodbyeDPI-Turkey) projesinin sıfırdan yeniden yazılmış ve optimize edilmiş versiyonudur.
+<a id="oyun-dostu"></a>
+## Oyun Dostu Mod (Varsayılan) ve `domains.txt`
 
-Orijinal sürümden farklı olarak klasör içinde onlarca `.cmd` komut dosyası barındırmaz ve görev çubuğunda açık kalan siyah bir komut istemi (`cmd.exe`) penceresi tutmaz. Uygulama çalıştırıldığında doğrudan sağ alt köşedeki **Windows Sistem Tepsisine (System Tray / Bildirim Alanı)** yerleşir; tüm profil geçişleri, otomatik İSS algılama ve başlangıç ayarları sağ tık menüsü üzerinden yapılır.
+Eski sürümlerde DPI bölme ve genel UDP 53 DNS yönlendirmesi bilgisayardaki **tüm** bağlantılara uygulandığı için bazı çevrimiçi oyunların sunucu korumaları (`Rob Run / kefir.games` vb.) paketleri düşürebiliyor ve `77.88.8.8:1253` üzerinden çözülmeyen CDN adresleri (`tr.rbxcdn.com`) eksik kalabiliyordu.
 
-## GoodbyeDPI — Derin Paket İnceleme (DPI) atlatma aracı (Türkiye versiyonu)
+**TurkDPI v2.1**, profiller `[0]`–`[6]` arasındayken trafiği alan adı bazında ayırır:
 
-Bu uygulama, Türkiye'deki bazı internet servis sağlayıcılarının DNS değişikliğine izin vermemesi ve SNI tabanlı paket engellemesi uygulaması sebebiyle, asıl proje olan [GoodbyeDPI](https://github.com/ValdikSS/GoodbyeDPI)'ın Türkiye'deki İSS profillerine göre yeniden yapılandırılmış bir versiyonudur.
-Birçok İSS'de (İnternet Servis Sağlayıcısı) bulunan ve belirli web sitelerine erişimi engelleyen "Derin Paket İnceleme" (DPI) sistemlerini atlatmak için tasarlanmıştır.
-Optik ayırıcı veya port yansıtma (Pasif DPI) kullanarak bağlanan ve herhangi bir veriyi engellemeyen, ancak istenen hedeften daha hızlı yanıt veren DPI sistemlerini ve sıralı olarak bağlanan Aktif DPI cihazlarını işler. Bu uygulama bir VPN değildir; trafiğinizi uzak bir sunucu üzerinden geçirmez ve oyunlarda veya genel internet kullanımında hız ya da ping değişikliğine sebep olmaz.
-
-> [!NOTE]
-> Windows 10 ve 11 işletim sistemlerinde uygulama kendi manifest dosyası sayesinde çalışırken otomatik olarak yönetici izni (UAC) ister.
-
-## Virüs & Veri Sızıntısı & Bitcoin Mining
-
-Program açık kaynak kodlu olduğundan tüm kaynak kodunu `src/` klasörü altından inceleyebilirsiniz. Bazı kullanıcılar VirusTotal'de false positive (hatalı olumlu) sonuçlarla karşılaşabilmektedir; bunun sebebi paket yakalama işlemini yapan `WinDivert.dll` ve `WinDivert64.sys` sürücü dosyalarının doğrudan Windows ağ yığınına müdahale etmesidir. Bu `.dll` ve `.sys` dosyaları da açık kaynak kodludur ve Microsoft tarafından dijital olarak imzalanmıştır.
-Dilerseniz tüm klasörü ya da `.zip` dosyasını [VirusTotal](https://www.virustotal.com/gui/home/upload) üzerinde taratıp sonuçları inceleyebilirsiniz.
-
-> [!IMPORTANT]
-> WinDivert dosyalarının açıklamalarında ya da özelliklerinde karşılaşacağınız Bitcoin adresi sizi endişelendirmesin.
-> WinDivert açık kaynaklı bir Windows Paket İnceleme ve Değiştirme kütüphanesidir. Kütüphanenin geliştiricisi olan [basil00](https://github.com/basil00), bu projeyi ücretsiz ve açık kaynak kodlu olarak [GitHub - WinDivert](https://github.com/basil00/WinDivert) deposunda paylaşmaktadır.
-> Geliştirici, bağış yapmak isteyenler için Bitcoin cüzdan adresini `.dll` ve `.sys` dosyalarının dosya açıklamasına eklemiştir. Dosya özelliklerinde görünen karmaşık harf ve rakam dizisi, WinDivert geliştiricisi basil00'a ait [resmi bağış sayfasındaki](https://reqrypt.org/donate.html) Bitcoin cüzdan adresidir.
-
-## GoodbyeDPI'ı Kullanmak
-
-Bu sürümde karmaşık `.cmd` betikleri kaldırılmıştır. İndirdiğiniz arşivde yalnızca 3 dosya yer alır: `goodbyedpi.exe`, `WinDivert.dll` ve `WinDivert64.sys`.
-
-1. [Releases](https://github.com/SS2Genji/GoodbyeDPI-Turkey/releases) sayfasından **`GoodbyeDPI-Turkey-Optimized.zip`** dosyasını bilgisayarınıza indirin.
-2. ZIP dosyasını kalıcı bir klasöre çıkarın (örneğin `C:\GoodbyeDPI\`).
-3. Klasör içindeki **`goodbyedpi.exe`** dosyasına çift tıklayın.
-4. Uygulama konsol penceresi açmadan sağ alt köşedeki **Sistem Tepsisine (System Tray)** yerleşir. İlk çalıştırmada internet servis sağlayıcınız için en hızlı çalışan profili otomatik olarak test edip seçer ve `turkdpi.cfg` dosyasına kaydeder.
-
-> [!NOTE]
-> İndirdiğiniz ZIP dosyasını çıkarttığınız konumdan taşımayın. Windows açılışında otomatik başlatma özelliğini aktif ettiğinizde sistem bu dosya yolunu kullanır. Dosyaları silmeyecek veya taşımayacağınız bir klasörde (`C:\GoodbyeDPI\` gibi) tutmanız önerilir.
-
-### Sistem Tepsisi (Sağ Tık Menüsü) Kullanımı
-
-Sağ alt köşedeki uygulama simgesine sağ tıkladığınızda (veya sol tıkladığınızda) açılan menüden tüm işlemleri yönetebilirsiniz:
-
-- **Otomatik İSS Algıla (En Hızlı Profili Bul):** 7 farklı Türkiye İSS profilini gerçek TLS 1.3 bağlantısıyla arka planda test eder ve en düşük gecikmeli çalışan profili otomatik seçer.
-- **Discord & TLS 1.3 Bağlantısını Test Et:** `discord.com` ile canlı TLS 1.3 el sıkışması yaparak bağlantı süresini milisaniye (`ms`) cinsinden ölçer ve bildirim olarak gösterir.
-- **Profil Seçimi (`[0]` – `[7]`):** Uygulamayı kapatıp açmaya gerek kalmadan Türk Telekom, TurkNet, Kablonet ve Superonline alternatif profilleri arasında anında geçiş yapar ve DNS önbelleğini temizler.
-- **Oyun Dostu Mod (Varsayılan Aktif):** Yalnızca engelli sitelere (Discord, Roblox, Wattpad ve isteğe bağlı `domains.txt`) DPI ve DNS yönlendirmesi uygular. Online oyunlar (Rob Run, Valorant, Steam vb.) ve normal web siteleri filtreden etkilenmez. İstediğinizde sağ tık menüsünden **Tüm İnternet Trafiği** moduna geçebilirsiniz.
-- **DPI Filtresini Duraklat / Başlat:** Uygulamadan çıkmadan paket filtrelemeyi geçici olarak duraklatır veya yeniden başlatır.
-- **Windows Açılışında Otomatik Başlat:** Eski `service_install.cmd` dosyalarına gerek kalmadan, bilgisayar her açıldığında uygulamanın sağ alt tepside otomatik olarak başlamasını sağlar.
-- **Sürücü ve Ayarları Sıfırla (Tamamen Kaldır):** Çalışan filtreyi durdurur, `WinDivert` çekirdek sürücüsünü kaldırır, otomatik başlatma görevini ve `turkdpi.cfg` ayar dosyasını silip DNS önbelleğini temizler.
-
-## GoodbyeDPI'ı Kaldırmak ve Ayarları Eski Haline Getirmek
-
-Uygulamayı, `WinDivert` sürücüsünü ve başlangıç görevini bilgisayarınızdan tamamen kaldırmak için herhangi bir `.cmd` dosyası çalıştırmanıza gerek yoktur:
-
-1. Sağ alt köşedeki (System Tray) uygulama simgesine sağ tıklayın.
-2. **Sürücü ve Ayarları Sıfırla (Tamamen Kaldır)** seçeneğine tıklayın ve onay verin.
-3. Uygulama tüm sürücü kayıtlarını ve başlangıç ayarlarını temizleyip kapanacaktır. Ardından klasörü silebilirsiniz.
-
-Komut satırından kaldırmak isterseniz aynı işlemi `goodbyedpi.exe --uninstall` komutuyla da yapabilirsiniz.
-
-## Superonline ve Alternatif Yöntemler
-
-Superonline Fiber veya katı DPI uygulayan diğer servis sağlayıcılarda standart profil çalışmadığında, sağ tık menüsündeki **Otomatik İSS Algıla** seçeneği alternatif profilleri sırayla deneyerek çalışan yöntemi bulur. Dilerseniz sağ tık menüsünden manuel olarak da seçebilirsiniz:
-
-- **Profil [0] Standart Türkiye:** Türk Telekom, TurkNet, Kablonet (Mod `-5` + Yandex DNS `77.88.8.8:1253`)
-- **Profil [1] Alternatif 1:** Superonline (Sadece `TTL 3`)
-- **Profil [2] Alternatif 2:** Superonline (Mod `-5` Auto-TTL)
-- **Profil [3] Alternatif 3:** Superonline (`TTL 3` + Yandex DNS)
-- **Profil [4] Alternatif 4:** Superonline (Mod `-5` + Yandex DNS)
-- **Profil [5] Alternatif 5:** Modern Mod `-9` + Yandex DNS (3 parçalı SNI ortası bölme, ters sıralama ve Discord UDP ses atlatma, siteleri en az bozan profil)
-- **Profil [6] Alternatif 6:** Modern Mod `-9` (DNS yönlendirmesiz)
-
-> [!NOTE]
-> DNS yönlendirmesi içermeyen **Profil 1, 2 veya 6**'yı manuel olarak seçerseniz, Windows ağ ayarlarınızdan DNS adresinizi **Yandex DNS (`77.88.8.8` / `77.88.8.1`)** veya **Cloudflare DNS (`1.1.1.1` / `1.0.0.1`)** olarak ayarlamanız gerekir. **Profil 0, 3, 4 ve 5** ise DNS trafiğini otomatik olarak port `1253` üzerinden Yandex DNS'e yönlendirir.
-
-### Oyun Dostu Mod (Varsayılan) ve Özel Alan Adları (`domains.txt`)
-
-Varsayılan olarak açık gelen **Oyun Dostu Mod**, gereksiz DPI paket bölme/sahte paket gönderme ve Yandex DNS yönlendirmesini yalnızca Türkiye'de erişim engelli hizmetlere (**Discord**, **Roblox** — görsel önbelleği `rbxcdn.com` hariç tutularak yerel CDN hızında — ve **Wattpad**) uygular:
-
-- Online oyun sunucuları (ör. `Rob Run / kefir.games`, `Valorant`, `Steam`), bankacılık ve normal siteler yerel DNS'iniz üzerinden doğrudan ve sıfır müdahaleyle çalışır.
-- Kendi eklemek istediğiniz engelli alan adları varsa `goodbyedpi.exe` ile aynı klasöre **`domains.txt`** dosyası oluşturup alt alta yazabilirsiniz (ör. `ornek-site.com`); değişikliklerin yüklenmesi için sağ tık menüsünden **Duraklat / Başlat** yapmanız yeterlidir.
-- Güvenli İnternet profili veya genel ağ engelleri için tüm trafiği yönlendirmek isterseniz, tepsi menüsünden **Oyun Dostu Mod** işaretini kaldırarak anında **Tüm Trafik** moduna geçebilirsiniz.
-
-### Türk Telekom Alternatif — League / Vanguard uyumluluğu [7]
-
-Sistem tepsisi menüsünden **[7] Türk Telekom Alternatif (1 Bayt TLS + Sabit TTL 3)** profilini elle seçebilirsiniz. Bu profil TLS ClientHello paketini ilk bayttan böler ve yalnızca TTL değeri 3 olan bir sahte TCP paketi kullanır. DNS yönlendirmesi, QUIC engellemesi, TCP MD5/yanlış sıra numarası/yanlış checksum yöntemleri ve ses için UDP sahte paketleri bu profilde kapalıdır.
-
-Profil yalnızca League alan adlarıyla sınırlı değildir; genel bağlantılara uygulanır. Ağınıza ve İSS yoluna göre sonuç değişebilir. Sabit düşük TTL değeri her bağlantıda uygun olmayabilir. League/Vanguard kontrolü yapmayan otomatik Discord/İSS taramasına bu nedenle dahil edilmez; diğer profillerin otomatik seçimi değişmez.
-
-> İlk kullanımda League/Vanguard girişini, Discord masaüstü güncelleyicisini ve sesli sohbeti kendi bağlantınızda ayrı ayrı kontrol edin. Her ağda veya engellenen her hizmette çalışma garantisi yoktur.
-
-## Sık Karşılaşılan Sorunlar
-
-- **WinDivert dosyaları bulunamadı hatası (Yalancı virüs algılaması):**
-  Bu hatayı alıyorsanız antivirüs programınız `WinDivert64.sys` veya `WinDivert.dll` dosyasını karantinaya almış olabilir. Kullandığınız antivirüs yazılımında uygulamayı çıkardığınız klasörü dışlamalara (istisnalara) ekleyin. Kaspersky kullanıyorsanız dışlamalara eklemek yeterli olmayacağından Kaspersky'i sistemden kaldırmanız gerekir.
-
-- **Bazı sitelerin yavaş açılması veya açılmaması sorunu:**
-  Sabit düşük TTL değeri (`TTL 3`) kullanan **Profil 1** veya **Profil 3** seçiliyse bazı uzak sunuculara giden paketler hedefe ulaşmadan düşebilir. Sağ alt tepsideki simgeye sağ tıklayıp **Profil [5]** (Modern Mod `-9`), **Profil [4]** veya **Profil [2]** seçeneğine geçiş yaparak sorunu anında çözebilirsiniz.
-
-- **Discord'a web üzerinden girilebilmesine rağmen masaüstü uygulamasının açılmaması ("Update failed") sorunu:**
-  Sisteminizde daha önceden kalma başka bir GoodbyeDPI veya WinDivert kullanan uygulama çakışma yaratıyor olabilir. Önce sağ tık menüsünden **Sürücü ve Ayarları Sıfırla (Tamamen Kaldır)** seçeneğini çalıştırıp bilgisayarınızı yeniden başlatın ve yalnızca tek bir klasörden `goodbyedpi.exe` uygulamasını başlatın.
-
-- **Ethernet bağlantısı sorunu:**
-  İnternet bağlantınızı ethernet adaptörü ile sağlıyorsanız ve tüm profilleri denemenize rağmen sonuç alamıyorsanız **harmanprecious** isimli kullanıcının hazırladığı ethernet kartı ayar rehberine [Technopat Sosyal konusundan](https://www.technopat.net/sosyal/konu/goodbyedpi-ethernet-kartiyla-calismiyorsa-ne-yapilmali.3619948/) ulaşabilirsiniz.
-
-## Performans ve Mimari Karşılaştırma (Benchmark)
-
-Bu depodaki motor (`TurkDPI v2.1`), orijinal `GoodbyeDPI-Turkey` kod tabanındaki darboğazları ortadan kaldırmak üzere sıfırdan C ile yeniden yazılmıştır:
-
-- **Sıfır Bellek Tahsisi (Zero-Allocation Conntrack):** Orijinal kodda her DNS sorgusunda ve her TCP `SYN-ACK` paketinde çalışan `uthash` (`malloc` / `free`) yapısı kaldırılmış; yerine 64-bayt işlemci önbelleği (cache-line) hizalı statik tablolar ve donanımsal `SSE4.2 CRC32C` (`_mm_crc32_u64`) özetleme fonksiyonu getirilmiştir.
-- **Doğrudan TLS 1.3 ve Post-Quantum (`X25519MLKEM768`) SNI Ayrıştırma:** Orijinal kodun 1200+ baytlık TLS `ClientHello` paketini bayt bayt taraması yerine, TLS kayıt ve uzantı uzunlukları üzerinden doğrudan `0x0000` (SNI) uzantısının ofsetine atlayan $O(\text{uzantı})$ ayrıştırıcı yazılmıştır.
-- **RFC 1624 Diferansiyel Checksum:** TCP pencere boyutu, sıra numarası, TTL veya DNS IP/port değiştirildiğinde tüm paketi baştan taramak yerine yalnızca değişen 16/32-bitlik başlık alanları $O(1)$ sürede güncellenir.
-- **Toplu Paket İşleme (`WinDivertRecvEx` / `WinDivertSendEx`):** Çekirdek ve kullanıcı alanı (Ring-0 / Ring-3) arasındaki geçiş maliyetini düşürmek için paketler 64'lü diziler halinde okunur ve 3 parçalı SNI bölme paketleri tek bir sistem çağrısıyla gönderilir.
-
-### A/B Çekirdek Benchmark Sonuçları (`gcc -O3 -flto -march=x86-64-v2`)
-
-`tests/bench_hotpath.c` içerisindeki test paketi, orijinal `GoodbyeDPI-Turkey` algoritmaları ile `TurkDPI v2.1` fonksiyonlarını aynı paket yükleri üzerinde 500.000 – 2.000.000 iterasyon boyunca çalıştırarak karşılaştırır:
-
-| Çekirdek / Paket Hattı Aşaması | Orijinal GoodbyeDPI-Turkey | TurkDPI v2.1 | Hızlanma | Teknik Fark |
-| :--- | :---: | :---: | :---: | :--- |
-| **TLS 1.3 PQ-ClientHello SNI Ayrıştırma** (`1297 B`) | `605.85 ns` | **`7.96 ns`** | **76.1x** | Bayt tarama yerine uzantı uzunluklarından doğrudan SNI ofsetine atlama |
-| **Paket Başlığı Checksum Hesabı** (`547 B`) | `44.50 ns` | **`2.14 ns`** | **20.8x** | Tam paket taraması yerine $O(1)$ RFC 1624 diferansiyel güncelleme |
-| **HTTP Başlık Arama (`fast_memmem`)** (`507 B`) | `118.60 ns` | **`23.62 ns`** | **5.0x** | Bayt döngüsü yerine `SSE2` 16-bayt/döngü vektör karşılaştırma |
-| **DNS Conntrack (`Giden + Gelen`)** | `77.53 ns` (`malloc`/`free`) | **`20.10 ns`** (`0 tahsis`) | **3.9x** | `UTHASH` + bağlı liste temizliği yerine 64B hizalı statik tablo |
-| **Uçtan Uca TLS Desync Hattı (End-to-End)** | `856.59 ns` | **`186.93 ns`** | **4.6x** | `9016B` kopya + 2 ayrı syscall yerine 3-parça SNI-MidSplit tek `WinDivertSendEx` |
-| **Tek Çekirdek Maksimum TLS Desync Hızı** | `1.17 Mpps` | **`5.35 Mpps`** | **4.6x** | Saniyede işlenebilen milyon TLS `ClientHello` paketi |
-
-```text
-====================================================================================
-  HEAD-TO-HEAD A/B BENCHMARK: Original GoodbyeDPI-Turkey vs. TurkDPI v2.1
-====================================================================================
-  Kernel / Pipeline Stage              |     Original | TurkDPI v2.1 |    Speedup
-  -------------------------------------+--------------+--------------+-----------
-  TLS 1.3 PQ-ClientHello SNI (1297B)   |    605.85 ns |      7.96 ns |     76.1x
-  Packet Header Checksum (547B)        |     44.50 ns |      2.14 ns |     20.8x
-  HTTP Header Search (507B)            |    118.60 ns |     23.62 ns |      5.0x
-  DNS Conntrack (Out+In + 0-Alloc)     |     77.53 ns |     20.10 ns |      3.9x
-  Full TLS Desync Pipeline (End2End)   |    856.59 ns |    186.93 ns |      4.6x
-  -------------------------------------+--------------+--------------+-----------
-  Max Single-Core TLS Desync Rate      |    1.17 Mpps |    5.35 Mpps |      4.6x
-====================================================================================
+```mermaid
+flowchart LR
+    A["Giden Paket (DNS / TLS / HTTP)"] --> B{"Oyun Dostu Mod veya -b Aktif mi?"}
+    B -- "Hayır (Tüm Trafik)" --> D["Seçili İSS Profili (Genel DPI ve DNS)"]
+    B -- "Evet (Varsayılan)" --> C{"Hedef Listede mi? (Discord, Roblox, Wattpad, domains.txt)"}
+    C -- "Evet" --> E["Hedefe Özel DPI Desync ve Akıllı DNS (77.88.8.8:1253)"]
+    C -- "Hayır (Rob Run, Valorant, Steam, tr.rbxcdn.com)" --> F["Doğrudan Geçiş (Sıfır Müdahale ve Yerel DNS)"]
 ```
 
-### Testleri Kendiniz Çalıştırma
+### Dahili Hedef Listesi
+Varsayılan liste aşağıdaki hizmetleri ve tüm alt alan adlarını kapsar:
+- **Discord:** `discord.com`, `discord.gg`, `discordapp.com`, `discordapp.net`, `discord.media`, `discordcdn.com`, `discordstatus.com`, `dis.gd`, `discord.co`, `discord.new`, `discord.gift`, `discord.design`, `discord.dev`, `discord.tools`, `discord-activities.com`, `discordsays.com`, `discordpartygames.com`
+- **Roblox:** `roblox.com`, `rbx.com`, `robloxlabs.com`, `rbxtrk.com`, `rbxinfra.net`, `rblx.co` *(görsel CDN `rbxcdn.com` hariç)*
+- **Wattpad:** `wattpad.com`, `w.tt`
 
-**1. A/B Çekirdek Benchmark'ı (Linux / WSL / MinGW):**
-```bash
-make -C src test OPTIMIZE=1
-```
+### Kendi Alan Adlarınızı Ekleme (`domains.txt`)
+Ekstra bir siteyi veya uygulamayı da DPI/DNS filtresinden geçirmek isterseniz:
+1. `goodbyedpi.exe` ile aynı klasörde **`domains.txt`** adlı bir metin dosyası oluşturun.
+2. Her satıra bir kök alan adı yazın (alt alan adları otomatik kapsanır; `#` ile yorum satırı ve UTF-8 BOM desteklenir):
+   ```text
+   # Özel erişim kurallarım
+   ornek-site.com
+   alt.baska-alanadi.org
+   ```
+3. Sağ alt tepsi menüsünden **DPI Filtresini Duraklat** -> **Başlat** yapın; liste çalışan iş parçacığına güvenli biçimde yeniden yüklenir.
 
-**2. Canlı Windows Ölçümü (PowerShell):**
-`goodbyedpi.exe` sistem tepsisinde çalışırken PowerShell üzerinden anlık bellek/CPU kullanımını ve gerçek `discord.com:443` TLS 1.3 el sıkışma süresini ölçmek için:
+---
+
+<a id="tepsi"></a>
+## Sistem Tepsisi (Sağ Tık Menüsü) ve Kaldırma
+
+Sağ alt tepsideki TurkDPI simgesine sağ tıkladığınızda (veya sol tıkladığınızda) aşağıdaki kontroller açılır:
+
+| Menü Öğesi | İşlev |
+| :--- | :--- |
+| **`⚡ Otomatik İSS Algıla`** | `[0]`–`[6]` profillerini canlı `discord.com` ve `gateway.discord.gg` TLS 1.3 + `www.google.com` kontrolüyle test ederek en hızlı çalışan profili seçer. |
+| **`🔍 Discord & TLS 1.3 Bağlantısını Test Et`** | Mevcut aktif profille `discord.com:443` el sıkışma süresini (`ms`) canlı ölçüp bildirim gösterir. |
+| **`[0]` – `[7]` Profil Seçimi** | Yeniden başlatma olmadan profiller arasında anında geçiş yapar ve Windows DNS önbelleğini temizler. |
+| **`🎮 Oyun Dostu Mod (...)`** | **Oyun Dostu (Sadece Engelli Siteler + `domains.txt`)** ile **Tüm İnternet Trafiği** modları arasında anında geçiş yapar (`turkdpi.cfg` içine kaydedilir). |
+| **`⏸ / ▶ DPI Filtresini Duraklat / Başlat`** | WinDivert filtresini geçici olarak durdurur veya `domains.txt` değişikliklerini okuyarak yeniden başlatır. |
+| **`🚀 Windows Açılışında Otomatik Başlat`** | Görev Zamanlayıcı üzerinde en yüksek yetkiyle `TurkDPI_Autostart` görevini açıp kapatır. |
+| **`🧹 Sürücü ve Ayarları Sıfırla (Tamamen Kaldır)`** | Filtreyi durdurur, `WinDivert` / eski `GoodbyeDPI` servislerini, `TurkDPI_Autostart` görevini ve `turkdpi.cfg` dosyasını siler, DNS önbelleğini temizleyip kapanır. |
+
+Komut satırından temizlemek için yönetici terminalinde `goodbyedpi.exe --remove` komutunu da çalıştırabilirsiniz.
+
+---
+
+<a id="profiller"></a>
+## Dahili Türkiye İSS Profilleri (`[0]` – `[7]`)
+
+Profiller `src/desync.c` içinde Türkiye'deki başlıca İSS DPI davranışlarına göre önceden tanımlanmıştır:
+
+| # | Profil Adı | Hedef İSS / Ağ | TCP / TLS Desync Stratejisi | DNS Yönlendirmesi | QUIC & UDP Ses | Oto-Tarama |
+| :---: | :--- | :--- | :--- | :--- | :---: | :---: |
+| **`[0]`** | **Standart Türkiye** | Türk Telekom, TurkNet, Kablonet, Millenicom, Netspeed | 3-parça SNI-MidSplit (ters sıra, `2B`) + `BadSum` + `BadSeq` | Yandex `77.88.8.8:1253` | Açık | Evet |
+| **`[1]`** | **Superonline & Vodafone Modern** | Turkcell Superonline, Vodafone Ev İnterneti | 3-parça SNI-MidSplit (ters sıra, `2B`) + `MD5Sig` + `Auto-TTL` + `BadSeq` | Yandex `77.88.8.8:1253` | Açık | Evet |
+| **`[2]`** | **Superonline Alternatif 1** | Superonline Fiber / VDSL | 3-parça SNI-MidSplit (ters sıra, `2B`) + `Auto-TTL` + `BadSeq` | Yandex `77.88.8.8:1253` | Açık | Evet |
+| **`[3]`** | **Superonline Alternatif 2** | Superonline (4+ hop uzaktaki santraller) | 3-parça SNI-MidSplit (ters sıra, `2B`) + `Sabit TTL 4` + `BadSeq` | Yandex `77.88.8.8:1253` | Açık | Evet |
+| **`[4]`** | **Superonline Alternatif 3 (Klasik)** | Superonline Klasik Mod | 3-parça SNI-MidSplit (`40B`, ters sıra) + `Sabit TTL 3` | Yandex `77.88.8.8:1253` | Açık | Evet |
+| **`[5]`** | **ByeDPI Saf SNI-Disorder** | Hafif DPI kullanan tüm İSS'ler *(sahte paketsiz)* | 3-parça SNI-MidSplit (ters sıra, `2B`) — sahte paket yok | Yandex `77.88.8.8:1253` | Açık | Evet |
+| **`[6]`** | **Cloudflare DNS + Hibrit** | Port `1253` engelli yurt / kampüs / kurumsal ağlar | 3-parça SNI-MidSplit (ters sıra, `2B`) + `BadSum` + `BadSeq` + `MD5Sig` | Cloudflare `1.1.1.1:53` | Açık | Evet |
+| **`[7]`** | **Türk Telekom Alternatif (League / Vanguard)** | Türk Telekom Güvenli İnternet & Riot / Vanguard | `1-Bayt` TLS bölme (sıralı) + `Sabit TTL 3` | Kapalı | Kapalı | Hayır (Manuel) |
+
+### Profil `[7]` — Türk Telekom Alternatif (League / Vanguard ve Güvenli İnternet Uyumluluğu)
+
+Sistem tepsisinden manuel seçilebilen **`[7] Türk Telekom Alternatif (1 Bayt TLS + Sabit TTL 3)`** profili, TLS `ClientHello` paketini yalnızca 1. bayttan böler ve yalnızca TTL değeri `3` olan bir sahte TCP paketi yollar; DNS yönlendirmesi, QUIC bloklama, TCP `MD5Sig`/`BadSeq`/`BadSum` ve UDP ses sahte paketleri bu profilde kapalıdır.
+
+- Riot/Vanguard ve Güvenli İnternet uyumluluğu genel bağlantılara uygulandığından, menüden **`[7]`** seçildiğinde uygulama otomatik olarak **Tüm İnternet Trafiği** moduna geçer (`[0]`–`[6]` profillerine geri döndüğünüzde yeniden **Oyun Dostu Mod** aktif olur).
+- Sabit düşük TTL (`3`) ağ yoluna göre değişkenlik gösterebileceği ve otomatik tarayıcı Vanguard bağlantısını test etmediği için otomatik taramaya dahil edilmez. İlk kullanımda League/Vanguard girişi ile Discord masaüstü sesli sohbetini kendi bağlantınızda ayrıca doğrulamanız önerilir.
+
+---
+
+<a id="benchmark"></a>
+## Mimari ve Performans Karşılaştırması
+
+Orijinal `GoodbyeDPI-Turkey` kod tabanındaki bellek tahsisi ve doğrusal tarama darboğazları bu motorda C99 ile yeniden yazılmıştır:
+
+- **Sıfır Bellek Tahsisli (`Zero-Allocation`) Conntrack:** DNS yönlendirme ve TCP `SYN-ACK` Auto-TTL takibi için `uthash` + `malloc`/`free` kaldırılmış, yerine 64-bayt önbellek hizalı statik tablolar ve donanımsal `SSE4.2 CRC32C` (`_mm_crc32_u64`) özetleme getirilmiştir.
+- **Doğrudan TLS 1.3 & PQ (`X25519MLKEM768`) SNI Tarayıcı (`extract_sni_info`):** `ClientHello` paketini bayt bayt aramak yerine TLS kayıt ve uzantı uzunluklarını atlayarak doğrudan `0x0000` (SNI) uzantısının ofsetini $O(\text{uzantı})$ sürede bulur.
+- **Sıfır Tahsisli RFC 1035 DNS QNAME Ayrıştırıcı (`dns_extract_qname`):** Sıkıştırma işaretçilerini ve hatalı etiket uzunluklarını reddederek sorgulanan alan adını dinamik bellek ayırmadan çıkarır ve statik açık adreslemeli alan adı tablosunda doğrular.
+- **RFC 1624 Diferansiyel Checksum:** TCP penceresi, sıra numarası, TTL veya yönlendirilmiş DNS IP/port bilgisi değiştirildiğinde paketin tamamını tekrar hesaplamak yerine yalnızca değişen 16/32-bit alanları $O(1)$ sürede günceller.
+- **Toplu Çekirdek I/O (`WinDivertRecvEx` / `WinDivertSendEx`):** 64 pakete kadar toplu okuma/yazma ve tek sistem çağrısıyla 3 parçalı ters sıralı SNI gönderimi yapar.
+
+### A/B Çekirdek Benchmark Sonuçları (`make -C src test OPTIMIZE=1`)
+
+`gcc -std=gnu99 -O3 -flto -march=x86-64-v2 -fno-plt` ile Linux test koşusunda (`tests/bench_hotpath.c`) elde edilen değerler:
+
+| Çekirdek / Paket Hattı Aşaması | Orijinal Yaklaşım | TurkDPI v2.1 | Hızlanma |
+| :--- | :---: | :---: | :---: |
+| **TLS 1.3 PQ-ClientHello SNI** (`1297 B`) | `587.84 ns` | **`7.87 ns`** | **74.7x** |
+| **Paket Başlığı Checksum Güncelleme** (`547 B`) | `42.90 ns` | **`2.13 ns`** | **20.2x** |
+| **HTTP Başlık Arama (`fast_memmem`)** (`507 B`) | `115.34 ns` | **`22.53 ns`** | **5.1x** |
+| **DNS Conntrack (`Giden + Gelen`, 0-Tahsis)** | `80.62 ns` | **`20.28 ns`** | **4.0x** |
+| **Uçtan Uca TLS Desync Hattı** | `838.61 ns` | **`184.84 ns`** | **4.5x** |
+| **Tek Çekirdek Maks. TLS Desync Hızı** | `1.19 Mpps` | **`5.41 Mpps`** | **4.5x** |
+| **Zero-Copy Hedef Alan Adı Arama** | — | **`14.32 ns/op`** | — |
+
+<details>
+<summary><strong>Canlı Windows Ölçüm Komutu (PowerShell)</strong></summary>
+
+`goodbyedpi.exe` sistem tepsisinde aktifken anlık RAM/CPU kullanımını ve canlı `discord.com:443` TLS 1.3 el sıkışma gecikmesini PowerShell üzerinden ölçmek için:
 
 ```powershell
 # Anlık RAM (MB) ve CPU süresini göster
 Get-Process goodbyedpi | Select-Object Name, Id, @{N="RAM (MB)";E={[math]::Round($_.WorkingSet64 / 1MB, 2)}}, @{N="CPU (sn)";E={[math]::Round($_.CPU, 3)}}
 
-# Discord.com:443 üzerinde 5 gerçek TLS 1.3 el sıkışmasını milisaniye olarak ölç
+# Discord.com:443 üzerinde 5 canlı TLS 1.3 el sıkışmasını ölç
 $ip = (Resolve-DnsName discord.com -Server 77.88.8.8 -Type A | Select-Object -First 1).IPAddress
 1..5 | ForEach-Object {
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
@@ -173,12 +168,118 @@ $ip = (Resolve-DnsName discord.com -Server 77.88.8.8 -Type A | Select-Object -Fi
     $ssl = New-Object System.Net.Security.SslStream($tcp.GetStream(), $false)
     $ssl.AuthenticateAsClient("discord.com")
     $sw.Stop()
-    Write-Host ("Test #{0}: Protokol={1} | El Sikisma Suresi={2} ms" -f $_, $ssl.SslProtocol, $sw.ElapsedMilliseconds)
+    Write-Host ("Test #{0}: Protokol={1} | Sure={2} ms" -f $_, $ssl.SslProtocol, $sw.ElapsedMilliseconds)
     $ssl.Dispose(); $tcp.Dispose()
 }
 ```
 
-## Yasal Uyarı
->
+</details>
+
+<details>
+<summary><strong>Gelişmiş Komut Satırı (CLI) Seçenekleri</strong></summary>
+
+Uygulama varsayılan olarak arayüzsüz Sistem Tepsisi modunda açılır, ancak gelişmiş kullanım ve betikler için tüm klasik ve yeni CLI bayraklarını da destekler:
+
+- **Tepsi / Yönetim:** `--auto` (`-A`), `--profile <0..7>` (`-P <0..7>`), `--remove` (`-R`)
+- **Modern Strateji:** `--split-sni`, `--md5sig`, `--udp-fake`, `--auto-ttl`, `--set-ttl <N>`, `--min-ttl <N>`, `--wrong-chksum`, `--wrong-seq`, `--native-frag`, `--reverse-frag`, `--max-payload [N]`
+- **DNS & Liste:** `--blacklist <dosya>` (`-b`), `--dns-addr <IP>` (`-d`), `--dns-port <port>` (`-g`), `--dnsv6-addr <IPv6>`, `--dnsv6-port <port>`
+- **Geleneksel Ön Ayarlar:** `-1` .. `-9` ve sahte paket yükleme (`--fake-from-hex`, `--fake-with-sni`)
+
+</details>
+
+---
+
+<a id="derleme"></a>
+## Kaynak Koddan Derleme, Testler ve Depo Yapısı
+
+```text
+GoodbyeDPI-Turkey/
+├── src/
+│   ├── main.c              # WinDivert döngüsü, akıllı QNAME/SNI filtreleme ve Win32 Sistem Tepsisi
+│   ├── conntrack.c         # RFC 1035 DNS QNAME ayrıştırıcı, DNS/TCP conntrack, varsayılan liste + domains.txt
+│   ├── desync.c            # [0]-[7] İSS profilleri, 3-parça SNI-MidSplit, sahte TCP/UDP göndericisi
+│   ├── probe.c             # Dahili non-blocking TLS 1.3 / DNS İSS otomatik algılama motoru
+│   ├── turkdpi.h           # Paylaşılan sabitler, SIMD/CRC32C/SNI/checksum inline çekirdekleri
+│   └── Makefile            # MinGW-w64 üretim derlemesi + Linux/WSL sanitizer test hedefleri
+├── tests/
+│   ├── bench_hotpath.c     # Doğruluk, regresyon, ASan/UBSan ve A/B performans test paketi
+│   └── shim/               # Linux üzerinde Win32/WinDivert birim testi için hafif başlık taklitleri
+├── windows/                # GitHub Actions tarafından derlenip paketlenen hazır x64 Windows çıktıları
+└── .github/workflows/      # Otomatik test, MinGW x64 derleme ve Release yayınlama hattı
+```
+
+### Birim Testlerini Çalıştırma (Linux / WSL)
+```bash
+# AddressSanitizer + UndefinedBehaviorSanitizer ile tüm doğruluk ve regresyon testleri
+make -C src test SANITIZE=1
+
+# Tam optimizasyon (-O3 -flto -march=x86-64-v2) ile A/B mikro-benchmark paketi
+make -C src test OPTIMIZE=1
+```
+
+### Windows x64 Binary Çapraz Derleme (MinGW-w64 + WinDivert 2.2.2-A)
+```bash
+cd src
+make CPREFIX=x86_64-w64-mingw32- BIT64=1 OPTIMIZE=1 \
+     WINDIVERTHEADERS=../WinDivert-2.2.2-A/include \
+     WINDIVERTLIBS=../WinDivert-2.2.2-A/x64 -j4
+```
+
+---
+
+<a id="sss"></a>
+## Güvenlik, Virüs Taraması ve Sık Karşılaşılan Sorunlar
+
+<details>
+<summary><strong>1. Antivirüs uyarısı / VirusTotal sonuçları ve WinDivert içindeki Bitcoin adresi nedir?</strong></summary>
+
+- Tüm kaynak kod `src/` altında açıktır; GitHub Actions (`build.yml`) doğrudan bu kaynak kodu derleyip yayınlar.
+- `WinDivert.dll` ve `WinDivert64.sys`, [basil00/WinDivert](https://github.com/basil00/WinDivert) projesinin Microsoft tarafından dijital imzalı açık kaynaklı çekirdek paket yakalama sürücüsüdür. Ağ yığınına doğrudan müdahale eden her sürücü gibi bazı antivirüslerde *false positive* (yanlış pozitif) oluşturabilir; uygulama klasörünü dışlamalara eklemeniz yeterlidir (Kaspersky hariç).
+- `.dll`/`.sys` dosya özelliklerindeki Bitcoin adresi kötü amaçlı yazılım veya mining değildir; WinDivert geliştiricisi basil00'ın [resmi bağış sayfasındaki](https://reqrypt.org/donate.html) adresidir.
+
+</details>
+
+<details>
+<summary><strong>2. Bir oyun (Rob Run, Valorant vb.) bağlanamıyor veya Roblox kapak resimleri yüklenmiyorsa ne yapmalıyım?</strong></summary>
+
+- Sağ alt tepsi menüsünde **`🎮 Oyun Dostu Mod`** seçili olduğundan emin olun (Profil `[7]` seçildiyse otomatik tüm trafiğe geçer; `[0]`–`[6]` profillerine dönünce tekrar aktifleşir).
+- Eğer Türk Telekom Güvenli İnternet aktifken **Valorant / League of Legends** erişim sorunu yaşıyorsanız manuel olarak **`[7] Türk Telekom Alternatif`** profilini seçin.
+- Yakın zamanda ayar değiştirdiyseniz menüden **Duraklat -> Başlat** yaparak Windows DNS önbelleğinin yenilenmesini sağlayın.
+
+</details>
+
+<details>
+<summary><strong>3. Discord web'de açılıyor ama masaüstü uygulamasında "Update failed" veriyor veya açılmıyorsa</strong></summary>
+
+- Sistemde önceden kalmış başka bir GoodbyeDPI / Zapret / WinDivert servisi çakışıyor olabilir.
+- Tepsi menüsünden **Sürücü ve Ayarları Sıfırla (Tamamen Kaldır)** seçeneğini çalıştırıp bilgisayarı yeniden başlatın; ardından yalnızca tek bir klasördeki güncel `goodbyedpi.exe` uygulamasını başlatın.
+
+</details>
+
+<details>
+<summary><strong>4. Superonline veya katı DPI ağlarda sayfalar/bağlantı takılıyorsa</strong></summary>
+
+- Sağ tık menüsünden **`⚡ Otomatik İSS Algıla`** seçeneğini çalıştırın veya manuel olarak **`[1] Superonline & Vodafone Modern`**, **`[5] ByeDPI Saf SNI-Disorder`** ya da **`[2]` / `[3]`** arasında geçiş yapın.
+- Okul/yurt gibi port `1253` engelli ağlarda **`[6] Cloudflare DNS + Hibrit`** profilini seçin.
+
+</details>
+
+<details>
+<summary><strong>5. Ethernet kartıyla hiçbir profil çalışmıyorsa</strong></summary>
+
+- Bazı ağ kartlarının donanımsal checksum offload ayarları paket manipülasyonunu engelleyebiliyor. **harmanprecious** tarafından hazırlanan rehbere [Technopat Sosyal konusundan](https://www.technopat.net/sosyal/konu/goodbyedpi-ethernet-kartiyla-calismiyorsa-ne-yapilmali.3619948/) ulaşabilirsiniz.
+
+</details>
+
+---
+
+## Teşekkür, Lisans ve Yasal Uyarı
+
+- Temel DPI atlatma yaklaşımı için [ValdikSS/GoodbyeDPI](https://github.com/ValdikSS/GoodbyeDPI) ve Türkiye profilleri için [cagritaskn/GoodbyeDPI-Turkey](https://github.com/cagritaskn/GoodbyeDPI-Turkey) projelerine,
+- Çekirdek paket sürücüsü için [basil00/WinDivert](https://github.com/basil00/WinDivert) projesine,
+- League / Vanguard uyumluluk profili (`#1`) ve test katkıları için [serhataydinxd](https://github.com/SS2Genji/GoodbyeDPI-Turkey/pull/1) başta olmak üzere tüm katkıda bulunanlara teşekkürler.
+
+Bu proje [Apache-2.0 Lisansı](LICENSE) ile lisanslanmıştır.
+
 > [!IMPORTANT]
-> Bu uygulamanın kullanımından doğan her türlü yasal sorumluluk kullanan kişiye aittir. Uygulama yalnızca eğitim ve araştırma amaçları ile yazılmış ve düzenlenmiş olup; bu uygulamayı bu şartlar altında kullanmak ya da kullanmamak kullanıcının kendi seçimidir. Açık kaynak kodlarının paylaşıldığı bu platformdaki düzenlenmiş bu proje, bilgi paylaşımı ve kodlama eğitimi amaçları ile yazılmış ve düzenlenmiştir.
+> Bu uygulamanın kullanımından doğan her türlü hukuki ve teknik sorumluluk kullanıcıya aittir. Yazılım yalnızca eğitim, ağ analizi ve araştırma amaçlarıyla geliştirilmiş ve paylaşılmıştır.
