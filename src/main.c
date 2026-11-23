@@ -610,6 +610,7 @@ static NOTIFYICONDATAW g_nid;
 static volatile int    g_current_profile_idx = 0;
 static volatile int    g_probing             = 0;
 static int             g_autostart_enabled   = 0;
+static int             g_tray_icon_added     = 0;
 
 static const wchar_t *g_profile_labels_w[TURKDPI_NUM_PROFILES] = {
     L"[0] Standart Türkiye (TT / TurkNet / Kablonet)",
@@ -785,8 +786,19 @@ static void save_selected_profile(int idx) {
 /* ============================================================================
  * 4. Native Win32 System Tray Engine & Right-Click Menu
  * ============================================================================ */
+static int tray_add_icon(void) {
+    if (!g_tray_hwnd) return 0;
+    g_nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
+    if (Shell_NotifyIconW(NIM_ADD, &g_nid)) {
+        g_tray_icon_added = 1;
+        return 1;
+    }
+    return 0;
+}
+
 static void tray_show_balloon(const wchar_t *title, const wchar_t *msg, DWORD info_flags) {
     if (!g_tray_hwnd) return;
+    if (!g_tray_icon_added && !tray_add_icon()) return;
     g_nid.uFlags      = NIF_INFO | NIF_TIP;
     g_nid.dwInfoFlags = info_flags;
     wcsncpy(g_nid.szInfoTitle, title, 63);
@@ -798,7 +810,6 @@ static void tray_show_balloon(const wchar_t *title, const wchar_t *msg, DWORD in
 
 static void tray_update_tooltip(void) {
     if (!g_tray_hwnd) return;
-    g_nid.uFlags = NIF_TIP;
     if (g_probing) {
         swprintf(g_nid.szTip, 127, L"TurkDPI v2.1 — İSS Analiz Ediliyor...");
     } else if (g_w_filter != INVALID_HANDLE_VALUE) {
@@ -815,6 +826,8 @@ static void tray_update_tooltip(void) {
         }
     }
     g_nid.szTip[127] = L'\0';
+    if (!g_tray_icon_added && !tray_add_icon()) return;
+    g_nid.uFlags = NIF_TIP;
     Shell_NotifyIconW(NIM_MODIFY, &g_nid);
 }
 
@@ -957,6 +970,18 @@ static LRESULT CALLBACK tray_wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
     switch (msg) {
         case WM_CREATE:
             s_wm_taskbar_restart = RegisterWindowMessageW(L"TaskbarCreated");
+            if (s_wm_taskbar_restart != 0) {
+                ChangeWindowMessageFilterEx(hwnd, s_wm_taskbar_restart, MSGFLT_ALLOW, NULL);
+            }
+            return 0;
+
+        case WM_TIMER:
+            if (wparam == 1) {
+                if (g_tray_icon_added || tray_add_icon()) {
+                    KillTimer(hwnd, 1);
+                    tray_update_tooltip();
+                }
+            }
             return 0;
 
         case WM_TRAYICON:
@@ -1056,7 +1081,12 @@ static LRESULT CALLBACK tray_wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
 
         default:
             if (s_wm_taskbar_restart != 0 && msg == s_wm_taskbar_restart) {
-                Shell_NotifyIconW(NIM_ADD, &g_nid);
+                g_tray_icon_added = 0;
+                if (tray_add_icon()) {
+                    tray_update_tooltip();
+                } else {
+                    SetTimer(hwnd, 1, 2000, NULL);
+                }
                 return 0;
             }
             return DefWindowProcW(hwnd, msg, wparam, lparam);
@@ -1115,8 +1145,10 @@ static int run_system_tray_app(int initial_profile, int force_auto) {
     if (!g_nid.hIcon) {
         g_nid.hIcon = LoadIconW(NULL, (LPCWSTR)IDI_APPLICATION);
     }
-    swprintf(g_nid.szTip, 127, L"TurkDPI v2.0 — Başlatılıyor...");
-    Shell_NotifyIconW(NIM_ADD, &g_nid);
+    swprintf(g_nid.szTip, 127, L"TurkDPI v2.1 — Başlatılıyor...");
+    if (!tray_add_icon()) {
+        SetTimer(g_tray_hwnd, 1, 2000, NULL);
+    }
 
     if (!start_engine_bg()) {
         MessageBoxW(NULL,
